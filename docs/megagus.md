@@ -27,7 +27,8 @@ What it keeps is the idea; what it changes:
   (128 of them the sample RAM), 76 888 LUTs (57 %) in all. The engine's multiplier is one
   DSP block, its voice tables are LUT RAM.
 - Not yet run on a MEGA65: nobody has heard it.
-- No player software and no emulator support yet.
+- A test program for the MEGA65 exists ([below](#test-program)); no player and no emulator
+  support yet.
 
 ## Where it is
 
@@ -172,6 +173,51 @@ looped by voice 0 at 440 Hz.
     80 POKE R+9,0:POKE R,3:REM COMMIT POS; RUN + LOOP
     90 GETKEY A$:POKE R,2:REM STOP
 
+## Test program
+
+`src/tests/megagus/megagustest.prg` checks the engine on a real MEGA65 and then plays things
+to listen to. Build it with
+
+    make USE_LOCAL_CC65=1 src/tests/megagus/megagustest.prg
+
+(or without `USE_LOCAL_CC65=1`, with the cc65 in the tree). It is a C64-mode program: with
+the MegaGus core running, `GO64`, load it and `RUN`, or with the m65 tool
+`m65 -4 -r src/tests/megagus/megagustest.prg`.
+
+It first prints one line a test:
+
+| Test                 | What it checks                                                       |
+|----------------------|----------------------------------------------------------------------|
+| reset                | Bit 7 of CONTROL: voices stop, the globals go back to their defaults |
+| sample ram           | Every byte of the RAM, each 256-byte block with its own pattern      |
+| voice registers      | Every register of voices 0, 15 and 31 reads back as written          |
+| plays once and ends  | RUN clears, ENDED sets, POS stops on the last sample                 |
+| backward             | The same toward START                                                |
+| 16-bit               | The same in 16-bit samples                                           |
+| loop                 | POS stays inside the loop and moves                                  |
+| stop and go on       | RUN = 0 holds POS; RUN = 1 carries on                                |
+| engine off and on    | Bit 0 of CONTROL holds every voice                                   |
+| ping-pong            | POS stays inside the loop, going both ways                           |
+| 48 khz               | 96 000 frames take two seconds of video frames                       |
+| 32 voices            | All run at once                                                      |
+
+A test that fails says what it read and what it expected (in hex). All of this is silent.
+Then, after a key, nine things to hear, each announced on the screen: a 440 Hz tone in the
+middle, left, right, moving from left to right, fading out and in, a scale, the tone from a
+16-bit sample, four drum hits left and right, and a chord on all 32 voices. None of them
+should click, crackle or distort.
+
+What it should sound like is in `src/tests/megagus/work/megagustest.wav` after
+
+    python3 src/tests/megagus/megagustest_host.py
+
+which builds the same C source for this computer and runs it against the engine's model:
+the tests pass there, and the sounds are checked to be what the screen says.
+
+The program without MegaGus says so and stops ("no megagus in this core"). Its own far
+memory routines can be tried in an emulator: built with `-DATTIC_SELFTEST` it runs its RAM
+test on the attic RAM instead.
+
 ## Not there (yet)
 
 - Interrupts. Poll RUNNING, ENDED or POS; time a player with a raster or CIA interrupt.
@@ -189,6 +235,8 @@ looped by voice 0 at 440 Hz.
 | `src/tests/megagus/megagus_test.py`     | A bit-exact model of the engine, and the tests    |
 | `src/vhdl/test_megagus.vhdl`            | Testbench: the engine against the model           |
 | `src/vhdl/test_megagus_bus.vhdl`        | Testbench: the engine in `slow_devices.vhdl`      |
+| `src/tests/megagus/megagustest.c`       | The test program for the MEGA65                   |
+| `src/tests/megagus/megagustest_host.py` | The same program on this computer, with the model |
 
 ## Tests
 

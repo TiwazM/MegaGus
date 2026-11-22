@@ -883,6 +883,11 @@ $(TESTDIR)/instructiontiming.prg:       $(TESTDIR)/instructiontiming.c $(TESTDIR
 	$(call mbuild_header,$@)
 	$(CL65) -O -o $*.prg --mapfile $*.map $< $(TESTDIR)/instructiontiming_asm.s
 
+# MegaGus test program (docs/megagus.md); megagustest_host.py runs the same source on the host
+$(TESTDIR)/megagus/megagustest.prg:       $(TESTDIR)/megagus/megagustest.c $(CC65_DEPEND)
+	$(call mbuild_header,$@)
+	$(CL65) -O -o $*.prg --mapfile $*.map $<
+
 $(UTILDIR)/mega65_config.prg:       $(UTILDIR)/mega65_config.o $(CC65_DEPEND)
 	$(call mbuild_header,$@)
 	$(LD65) $< -Ln $*.label -vm --mapfile $*.map -o $*.prg

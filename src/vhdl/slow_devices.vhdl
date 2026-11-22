@@ -14,6 +14,8 @@ ENTITY slow_devices IS
     has_hyperram : std_logic := '0';
     has_c64_cartridge_port : std_logic := '0';
     has_fakecartridge : std_logic := '0';
+    -- MegaGus: address bits of its sample RAM (19: 512 KB of block RAM); 0: no MegaGus
+    megagus_ram_bits : integer := 0;
     target : mega65_target_t := mega65r1
     );
   PORT (
@@ -52,6 +54,10 @@ ENTITY slow_devices IS
 
     fm_left : out signed(15 downto 0);
     fm_right : out signed(15 downto 0);
+
+    -- MegaGus wavetable sound
+    megagus_left : out signed(15 downto 0) := to_signed(0,16);
+    megagus_right : out signed(15 downto 0) := to_signed(0,16);
 
     ------------------------------------------------------------------------
     -- Expansion RAM (upto 128MB)
@@ -162,7 +168,8 @@ architecture behavioural of slow_devices is
     ExpansionRAMRequest,
     ExpansionRAMReadWait,
     CartridgePortRequest,
-    CartridgePortAcceptWait
+    CartridgePortAcceptWait,
+    MegaGusWait
     );
 
   signal state : slow_state := Idle;
@@ -178,6 +185,15 @@ architecture behavioural of slow_devices is
   signal opl_kon : std_logic_vector(8 downto 0);
   signal opl_sc : std_logic;
   signal opl_sc_128 : std_logic;
+
+  -- MegaGus: a request toggles mg_req, the engine answers by making mg_ack equal to it
+  signal mg_req : std_logic := '0';
+  signal mg_ack : std_logic := '0';
+  signal mg_write : std_logic := '0';
+  signal mg_ram : std_logic := '0';
+  signal mg_addr : unsigned(23 downto 0) := (others => '0');
+  signal mg_wdata : unsigned(7 downto 0) := x"00";
+  signal mg_rdata : unsigned(7 downto 0) := x"00";
 
 
 
@@ -196,6 +212,31 @@ begin
       channel_a => fm_left,
       channel_b => fm_right
       );
+
+  -- MegaGus: 32 hardware sample voices (docs/megagus.md). The engine runs on the CPU clock,
+  -- this bus on the pixel clock, twice as fast and synchronous to it.
+  megagus0: if megagus_ram_bits > 0 generate
+    megagus1: entity work.megagus
+      generic map (
+        clock_frequency => 40500000,
+        sample_rate => 48000,
+        ram_addr_bits => megagus_ram_bits
+        )
+      port map (
+        clock => cpuclock,
+        reset => reset_inverted,
+        req_toggle => mg_req,
+        req_write => mg_write,
+        req_ram => mg_ram,
+        req_addr => mg_addr,
+        req_wdata => mg_wdata,
+        ack_toggle => mg_ack,
+        ack_rdata => mg_rdata,
+        frame_tick => open,
+        audio_left => megagus_left,
+        audio_right => megagus_right
+        );
+  end generate;
 
   cartport0: entity work.expansion_port_controller
     generic map ( pixelclock_frequency => 80,
@@ -424,6 +465,21 @@ begin
               slow_access_ready_toggle <= slow_access_request_toggle;
               state <= Idle;
             end if;
+          elsif slow_access_address(27 downto 24) = x"E" and megagus_ram_bits > 0 then
+            -- @IO:GS $E000000-$EFFEFFF SUMMARY:MEGAGUS MegaGus sample RAM (512KB fitted)
+            -- @IO:GS $EFFF000-$EFFF3FF SUMMARY:MEGAGUS MegaGus voice and global registers
+            -- (Not $Fxxxxxx: the CPU sends writes there to the fast IO bus)
+            mg_write <= slow_access_write;
+            mg_wdata <= slow_access_wdata;
+            mg_addr <= slow_access_address(23 downto 0);
+            if slow_access_address(23 downto 12) = x"FFF" then
+              mg_ram <= '0';
+            else
+              mg_ram <= '1';
+            end if;
+            mg_req <= not mg_req;
+            expansionram_read_timeout <= to_unsigned(128,24);
+            state <= MegaGusWait;
           elsif slow_access_address(27 downto 8) = x"f0000" then
             slow_access_rdata <= x"00";
             if slow_access_address(7 downto 0) = x"00" then
@@ -631,6 +687,13 @@ begin
 --        expansionram_read_timeout <= expansionram_read_timeout_default;
       end if;
 
+      when MegaGusWait =>
+        if mg_ack = mg_req then
+          slow_access_rdata <= mg_rdata;
+          report "PUBLISH: MegaGus access complete";
+          slow_access_ready_toggle <= slow_access_request_toggle;
+          state <= Idle;
+        end if;
       when CartridgePortRequest =>
           report "Starting cartridge port access request, w="
             & std_logic'image(slow_access_write);

@@ -187,6 +187,7 @@ set files [list \
  "[file normalize "$origin_dir/src/vhdl/shifter32.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/multiply32.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/slow_devices.vhdl"]"\
+ "[file normalize "$origin_dir/src/vhdl/megagus.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/fake_expansion_port.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/expansion_port_controller.vhdl"]"\
  "[file normalize "$origin_dir/src/vhdl/machine.vhdl"]"\
@@ -633,6 +634,10 @@ set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 
 set file "vhdl/slow_devices.vhdl"
+set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
+set_property -name "file_type" -value "VHDL" -objects $file_obj
+
+set file "vhdl/megagus.vhdl"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 

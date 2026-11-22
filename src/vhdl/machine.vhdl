@@ -135,6 +135,8 @@ entity machine is
 
          fm_left : in signed(15 downto 0) := to_signed(0,16);
          fm_right : in signed(15 downto 0) := to_signed(0,16);
+         megagus_left : in signed(15 downto 0) := to_signed(0,16);
+         megagus_right : in signed(15 downto 0) := to_signed(0,16);
 
          ----------------------------------------------------------------------
          -- Flash RAM for holding FPGA config
@@ -1688,6 +1690,8 @@ begin
 
       fm_left => fm_left,
       fm_right => fm_right,
+      megagus_left => megagus_left,
+      megagus_right => megagus_right,
 
       porto_out => porto_out,
       portp_out => portp_out,

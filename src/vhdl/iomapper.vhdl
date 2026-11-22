@@ -88,6 +88,8 @@ entity iomapper is
 
         fm_left : in signed(15 downto 0) := x"0000";
         fm_right : in signed(15 downto 0) := x"0000";
+        megagus_left : in signed(15 downto 0) := x"0000";
+        megagus_right : in signed(15 downto 0) := x"0000";
 
         cpu_pcm_left : in signed(15 downto 0) := x"FFFF";
         cpu_pcm_right : in signed(15 downto 0) := x"FFFF";
@@ -1287,6 +1289,8 @@ begin
 
     fm_left => fm_left,
     fm_right => fm_right,
+    megagus_left => megagus_left,
+    megagus_right => megagus_right,
 
     pcm_left => pcm_left,
     pcm_right => pcm_right,

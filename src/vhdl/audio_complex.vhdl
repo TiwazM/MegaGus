@@ -52,6 +52,10 @@ entity audio_complex is
     -- OPL2/3 FM audio
     fm_left : in signed(15 downto 0);
     fm_right : in signed(15 downto 0);
+
+    -- MegaGus wavetable audio (joins the digital audio channel)
+    megagus_left : in signed(15 downto 0) := x"0000";
+    megagus_right : in signed(15 downto 0) := x"0000";
     
     -- Audio in from digital SIDs
     -- leftsid_audio : in signed(17 downto 0);
@@ -431,8 +435,34 @@ begin
     outputs(15) => dummy7
     );   
 
-  pcm_selected_left <= pcm_left when cpu_pcm_enable='0' else cpu_pcm_left;
-  pcm_selected_right <= pcm_right when cpu_pcm_enable='0' else cpu_pcm_right;
+  -- The digital audio channel: the $D6F8-B registers or the CPU's audio DMA, and with
+  -- either of them MegaGus. All 16 mixer inputs are taken, so it shares this pair (and its
+  -- mixer coefficients); the sum clips rather than wraps.
+  process (pcm_left, pcm_right, cpu_pcm_enable, cpu_pcm_left, cpu_pcm_right,
+           megagus_left, megagus_right) is
+    variable l : signed(16 downto 0);
+    variable r : signed(16 downto 0);
+  begin
+    if cpu_pcm_enable='0' then
+      l := resize(pcm_left,17);
+      r := resize(pcm_right,17);
+    else
+      l := resize(cpu_pcm_left,17);
+      r := resize(cpu_pcm_right,17);
+    end if;
+    l := l + resize(megagus_left,17);
+    r := r + resize(megagus_right,17);
+    if l(16) /= l(15) then
+      pcm_selected_left <= (15 => l(16), others => not l(16));
+    else
+      pcm_selected_left <= l(15 downto 0);
+    end if;
+    if r(16) /= r(15) then
+      pcm_selected_right <= (15 => r(16), others => not r(16));
+    else
+      pcm_selected_right <= r(15 downto 0);
+    end if;
+  end process;
   
   process (cpuclock) is
   begin    

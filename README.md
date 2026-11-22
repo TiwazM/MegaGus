@@ -1,3 +1,10 @@
+# MegaGus
+
+This is the MEGA65 core (`development`) with **MegaGus** added: a 32-voice wavetable sound
+engine in the spirit of the Gravis Ultrasound, with 512 KB of sample RAM, per-voice pitch,
+volume, panning and looping, and hardware mixing at 48 kHz. See [docs/megagus.md](docs/megagus.md)
+for the register map and its state. The rest of this file is the MEGA65 core's own README.
+
 # MEGA65 = Enhanced C65 running in FPGA.
 
 Please refer to the [main documentation index](https://github.com/MEGA65/mega65-core/blob/master/docs/index.md)

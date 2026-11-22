@@ -517,6 +517,8 @@ architecture Behavioral of container is
 
   signal fm_left : signed(15 downto 0);
   signal fm_right : signed(15 downto 0);
+  signal megagus_left : signed(15 downto 0);
+  signal megagus_right : signed(15 downto 0);
 
   constant clock_frequency : integer := 40500000;
   constant target_sample_rate : integer := 48000;
@@ -956,7 +958,8 @@ begin
   slowdev0: if true generate
   slow_devices0: entity work.slow_devices
     generic map (
-      target => mega65r6
+      target => mega65r6,
+      megagus_ram_bits => 19
       )
     port map (
       cpuclock => cpuclock,
@@ -974,6 +977,8 @@ begin
 
       fm_left => fm_left,
       fm_right => fm_right,
+      megagus_left => megagus_left,
+      megagus_right => megagus_right,
 
 --      cart_busy => led,
       cart_access_count => cart_access_count,
@@ -1109,6 +1114,8 @@ begin
 
           fm_left => fm_left,
           fm_right => fm_right,
+          megagus_left => megagus_left,
+          megagus_right => megagus_right,
 
           no_hyppo => '0',
 

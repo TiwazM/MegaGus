@@ -26,9 +26,9 @@ What it keeps is the idea; what it changes:
   2026-11-22): all timing constraints met (worst slack 0.082 ns), 267 of 365 block RAMs
   (128 of them the sample RAM), 76 888 LUTs (57 %) in all. The engine's multiplier is one
   DSP block, its voice tables are LUT RAM.
-- Not yet run on a MEGA65: nobody has heard it.
-- A test program for the MEGA65 exists ([below](#test-program)); no player and no emulator
-  support yet.
+- Run on a MEGA65 R6 (2026-11-23, the bitstream loaded over JTAG): the 12 tests of the
+  [test program](#test-program) pass. Its sounds have not been listened to yet.
+- No player and no emulator support yet.
 
 ## Where it is
 
@@ -160,7 +160,7 @@ PAN is linear, so a voice in the centre is at half level on each side.
 
 ## A first sound
 
-BASIC 65 (untested on hardware, as everything here): a 64-byte sine in the sample RAM,
+BASIC 65 (this listing has not been run): a 64-byte sine in the sample RAM,
 looped by voice 0 at 440 Hz.
 
     10 M=$E000000:R=$EFFF000
@@ -182,7 +182,16 @@ to listen to. Build it with
 
 (or without `USE_LOCAL_CC65=1`, with the cc65 in the tree). It is a C64-mode program: with
 the MegaGus core running, `GO64`, load it and `RUN`, or with the m65 tool
-`m65 -4 -r src/tests/megagus/megagustest.prg`.
+`m65 -4 -r src/tests/megagus/megagustest.prg`, or with MEGA65 Studio's `m65rs go64` and
+`m65rs prg -r src/tests/megagus/megagustest.prg`.
+
+To try the core without flashing it, `src/tests/megagus/jtagboot.py` loads `bin/mega65r6.bit`
+over JTAG with `m65rs` and keeps it running. `m65rs jtag bit` alone is not enough: the core
+has MEGAFLASH in it, which on a first boot restarts the FPGA from flash slot 1. The script
+halts the CPU as the new core comes up, sets the Hypervisor's "not the first boot" flag and
+resets. It also loads CIA 2's timer A with `$FFFF`: on a boot started this way the timer
+still holds its power-on value of 1, and the ROM (920413) then waits on it forever before
+BASIC starts. (Why a normal boot doesn't meet this has not been looked into.)
 
 It first prints one line a test:
 

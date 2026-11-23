@@ -5,7 +5,8 @@
   end and are timed, then plays a few things to listen to. See docs/megagus.md.
 
   Built with cc65 it is a C64-mode program (load to $0801, RUN): it switches the CPU to
-  40 MHz and reaches MegaGus with the DMA. Built with a host compiler it speaks a line
+  40 MHz and reaches MegaGus with the DMA. It can't be RUN a second time (cc65's start-up
+  code is in memory its variables then use): it plays its sounds again itself, on a key. Built with a host compiler it speaks a line
   protocol on stdin/stdout, which megagustest_host.py answers from the engine's model: the
   same tests, run before anything is on hardware.
 
@@ -55,7 +56,7 @@
 /* where the samples go */
 #define SINE8 0x000000UL  /* 64 bytes: one cycle, 8 bits */
 #define SINE16 0x000100UL /* 128 bytes: one cycle, 16 bits */
-#define DRUM 0x000200UL   /* 2048 bytes: a burst of noise dying away */
+#define DRUM 0x000200UL   /* 2048 bytes: a falling tone dying away */
 #define DRUM_LEN 2048U
 #define SCRATCH 0x001000UL /* whatever the RAM test left: played silently */
 
@@ -199,11 +200,11 @@ static unsigned char video_fps(void)
   return (PEEK(0xD06FU) & 0x80) ? 60 : 50;
 }
 
-static void wait_key(void)
+static unsigned char wait_key(void)
 {
   while (kbhit())
     cgetc();
-  cgetc();
+  return (unsigned char)cgetc();
 }
 
 static void setup(void)
@@ -283,8 +284,11 @@ static unsigned char video_fps(void)
   return 50;
 }
 
-static void wait_key(void)
+static unsigned char wait_key(void) /* nobody there: a key the first time, then the end */
 {
+  static unsigned char asked;
+
+  return asked++ ? 'q' : ' ';
 }
 
 static void setup(void)
@@ -466,16 +470,17 @@ static void test_ram(unsigned char size64k)
 
 static void load_samples(void)
 {
-  unsigned int i, n, lfsr, level;
+  unsigned int i, n, phase, level;
   mg_put(MG_RAM + SINE8, sine8, 64);
   mg_put(MG_RAM + SINE16, sine16, 128);
-  /* the drum: noise, its level falling to nothing over 2048 bytes */
-  lfsr = 0xACE1U;
+  /* the drum: the sine, its pitch falling to a third and its level to nothing over 2048
+     bytes (phase: 8.8 steps through the 64 bytes of sine8) */
+  phase = 0;
   for (n = 0; n < DRUM_LEN; n += 256) {
     for (i = 0; i < 256; i++) {
-      lfsr = (lfsr >> 1) ^ ((lfsr & 1) ? 0xB400U : 0);
       level = (DRUM_LEN - (n + i)) >> 3; /* 256 .. 0 */
-      buf[i] = (unsigned char)(((int)((lfsr & 0xFF) - 128) * (int)level) >> 8);
+      buf[i] = (unsigned char)(((int)(signed char)sine8[(phase >> 8) & 63] * (int)level) >> 8);
+      phase += 205 - ((n + i) >> 4); /* 205 .. 78 */
     }
     mg_put(MG_RAM + DRUM + n, buf, 256);
   }
@@ -674,33 +679,55 @@ static void sine(unsigned char v, unsigned long freq, unsigned int vol, unsigned
   voice(v, RUN | LOOP, SINE8, SINE8, SINE8 + 64, freq, vol, pan);
 }
 
+/* Fade a running voice out and wait until it is silent: before a stop or a jump in PAN,
+   which would otherwise cut the sound off with a click */
+static void hush(unsigned char v)
+{
+  wr16(V(v) + VOL, 0);
+  wait_frames(3);
+}
+
 static void listen(void)
 {
   unsigned char fps, v, i;
   unsigned int n;
-  static const unsigned long chord[4] = { F_C3, F_E3, F_G3, F_C4 };
+  /* C major, spread wide: C3 C4 G4 C5 E5 G5 C6 E6, at least 125 Hz from one to the next.
+     (Sines closer than that beat against each other: C3 E3 G3 together buzz at 33 Hz.) */
+  static const unsigned long chord[8] = { F_C3,      F_C4,      F_G3 << 1, F_C4 << 1,
+                                          F_E3 << 2, F_G3 << 2, F_C4 << 2, F_E3 << 3 };
 
   fps = video_fps();
   wr(G_CONTROL, 0x80);
+  wr(G_RAMP, 4); /* levels move over 16 ms: no sound starts or ends abruptly */
 
   say("1 a tone (440 hz) in the middle\n");
   sine(0, F_A4, 0xC000U, 128);
   wait_frames(fps + fps / 2);
 
-  say("2 left\n");
+  say("2 left\n"); /* PAN has no ramp, a jump clicks: move it while the voice is silent */
+  hush(0);
   wr(V(0) + PAN, 0);
+  wr16(V(0) + VOL, 0xC000U);
   wait_frames(fps);
   say("3 right\n");
+  hush(0);
   wr(V(0) + PAN, 255);
+  wr16(V(0) + VOL, 0xC000U);
   wait_frames(fps);
   say("4 from left to right\n");
+  hush(0);
+  wr(V(0) + PAN, 0);
+  wr16(V(0) + VOL, 0xC000U);
   for (n = 0; n < 256; n += 2) {
     wr(V(0) + PAN, (unsigned char)n);
     wait_frame();
   }
+  hush(0);
   wr(V(0) + PAN, 128);
+  wr16(V(0) + VOL, 0xC000U);
 
-  say("5 fading out and in\n");
+  say("5 fading out and in\n"); /* a step a video frame, each smoothed by the slowest ramp */
+  wr(G_RAMP, 1);
   for (n = 0; n < 48; n++) {
     wr16(V(0) + VOL, 0xC000U - n * 0x400U);
     wait_frame();
@@ -709,36 +736,46 @@ static void listen(void)
     wr16(V(0) + VOL, n * 0x400U);
     wait_frame();
   }
+  wr(G_RAMP, 4);
+  hush(0);
   wr(V(0) + CTRL, LOOP);
   wait_frames(fps / 4);
 
-  say("6 a scale\n");
+  say("6 a scale\n"); /* one voice going on: only its FREQ changes */
+  sine(0, scale[0], 0xC000U, 128);
   for (i = 0; i < 8; i++) {
-    sine(0, scale[i], 0xC000U, 128);
+    wr24(V(0) + FREQ, scale[i]);
     wait_frames(fps / 4);
   }
+  hush(0);
   wr(V(0) + CTRL, LOOP);
   wait_frames(fps / 4);
 
   say("7 the tone from a 16-bit sample\n");
   voice(1, RUN | LOOP | BIT16, SINE16, SINE16, SINE16 + 128, F_A4, 0xC000U, 128);
   wait_frames(fps + fps / 2);
+  hush(1);
   wr(V(1) + CTRL, LOOP | BIT16);
   wait_frames(fps / 4);
 
-  say("8 four drum hits, left and right\n");
+  say("8 four drum hits, left and right\n"); /* the drum's own shape: the fastest ramp */
+  wr(G_RAMP, 0x40);
   for (i = 0; i < 4; i++) {
     voice(2, RUN, DRUM, DRUM, DRUM + DRUM_LEN, 0x004000UL, 0xFFFFU, (i & 1) ? 224 : 32);
     wait_frames(fps / 2);
   }
 
+  /* the 16-bit sine, the slowest ramp (in and out in 85 ms); each note four times, a
+     little apart in pitch and spread from left to right */
   say("9 a chord on all 32 voices\n");
   wr(G_MASTER, 0x04);
+  wr(G_RAMP, 1);
   for (v = 0; v < 32; v++)
-    sine(v, (chord[v & 3] << (v >> 3)) + v * 3, 0xFFFFU, (unsigned char)(v * 8 + 4));
+    voice(v, RUN | LOOP | BIT16, SINE16, SINE16, SINE16 + 128, chord[v & 7] + v * 3, 0xFFFFU,
+          (unsigned char)(v * 8 + 4));
   wait_frames(fps * 2 + fps / 2);
   for (v = 0; v < 32; v++)
-    wr(V(v) + CTRL, LOOP);
+    wr16(V(v) + VOL, 0);
   wait_frames(fps / 4);
   wr(G_CONTROL, 0x80);
 }
@@ -785,8 +822,10 @@ int main(void)
 
   say("\na key for the sounds\n");
   wait_key();
-  listen();
-  say("\ndone\n");
+  do {
+    listen();
+    say("\ndone: q ends, another key plays\nthe sounds again\n");
+  } while (wait_key() != 'q');
   return failed_tests ? 1 : 0;
 #endif
 }

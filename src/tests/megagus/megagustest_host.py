@@ -129,13 +129,16 @@ def main():
     expect("4: left to right", peak(left[a:a + q]) > peak(left[b - q:b]) and
            peak(right[a:a + q]) < peak(right[b - q:b]))
     a, b = stretch(5)
-    mid = (a + b) // 2
-    expect("5: fades out and in", peak(left[mid - 500:mid + 500]) < 1000 < peak(left[a:a + 2000]))
+    q = (b - a) // 4
+    expect("5: fades out and in",
+           min(peak(left[i:i + 1000]) for i in range(a + q, b - q, 500)) < 1000 < peak(left[a:a + 2000]))
     a, b = stretch(6)
-    expect(f"6: a scale going up ({hz(left[a:a + 9000]):.0f} to {hz(left[b - 21000:b - 13000]):.0f} Hz)",
-           abs(hz(left[a + 1000:a + 9000]) - 261.6) < 8 and abs(hz(left[b - 21000:b - 13000]) - 523.3) < 8)
+    # the last note: a quarter of a second, before the fade (3 video frames) and the pause
+    expect(f"6: a scale going up ({hz(left[a:a + 9000]):.0f} to {hz(left[b - 25000:b - 17000]):.0f} Hz)",
+           abs(hz(left[a + 1000:a + 9000]) - 261.6) < 8 and abs(hz(left[b - 25000:b - 17000]) - 523.3) < 8)
     a, b = stretch(7)
-    expect(f"7: 440 Hz from the 16-bit sample ({hz(left[a:b]):.1f})", abs(hz(left[a:b - 12000]) - 440) < 3)
+    expect(f"7: 440 Hz from the 16-bit sample ({hz(left[a:b - 16000]):.1f})",
+           abs(hz(left[a:b - 16000]) - 440) < 3)
     a, b = stretch(8)
     expect("8: four hits, left right left right",
            all((peak(left[a + i * 24000:a + i * 24000 + 6000]) > peak(right[a + i * 24000:a + i * 24000 + 6000]))

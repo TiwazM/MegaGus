@@ -27,7 +27,19 @@ What it keeps is the idea; what it changes:
   (128 of them the sample RAM), 76 888 LUTs (57 %) in all. The engine's multiplier is one
   DSP block, its voice tables are LUT RAM.
 - Run on a MEGA65 R6 (2026-11-23, the bitstream loaded over JTAG): the 12 tests of the
-  [test program](#test-program) pass. Its sounds have not been listened to yet.
+  [test program](#test-program) pass and its nine sounds all play.
+- The engine's output on that machine is the model's, bit for bit: read back through the
+  audio mixer's `$D6FC`/`$D6FD` while all 32 voices played a chord started in one frame,
+  16 384 output frames of each side had no difference from the model. The mixer's speaker
+  outputs after it were the expected mix of the two sides, to within rounding, and far
+  from clipping. What comes after the mixer (the DAC, HDMI) was not measured.
+- What was heard as crackle came from how the test program played its sounds, and the
+  model's recording had it too: voices restarted at full level, PAN jumped (it has no
+  ramp), voices stopped without a fade, and the chord had C3, E3 and G3 as sines next to
+  each other, which beat (in the model its level on the left fluttered by a quarter at
+  66 Hz; spread wide, by about 2 %). The program now avoids each of these. On the machine
+  (heard 2026-11-24) the sounds are clean but for a faint trace still heard in the chord,
+  which has not yet been compared with the model's recording.
 - No player and no emulator support yet.
 
 ## Where it is
@@ -213,8 +225,9 @@ It first prints one line a test:
 A test that fails says what it read and what it expected (in hex). All of this is silent.
 Then, after a key, nine things to hear, each announced on the screen: a 440 Hz tone in the
 middle, left, right, moving from left to right, fading out and in, a scale, the tone from a
-16-bit sample, four drum hits left and right, and a chord on all 32 voices. None of them
-should click, crackle or distort.
+16-bit sample, four drum hits left and right, and a chord on all 32 voices (C major spread
+over four octaves, each note four times). None of them should click, crackle or distort. Afterwards any key but `Q` plays them again. (Typing `RUN`
+again does not work, as with any cc65 program of this kind: load it again instead.)
 
 What it should sound like is in `src/tests/megagus/work/megagustest.wav` after
 

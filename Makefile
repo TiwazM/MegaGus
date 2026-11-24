@@ -888,6 +888,12 @@ $(TESTDIR)/megagus/megagustest.prg:       $(TESTDIR)/megagus/megagustest.c $(CC6
 	$(call mbuild_header,$@)
 	$(CL65) -O -o $*.prg --mapfile $*.map $<
 
+# MegaGus MOD player (docs/megagus.md); modplay_host.py runs the same source on the host.
+# Its files come from the Hypervisor, with mega65-libc's two assembly sources for that.
+$(UTILDIR)/megagus/modplay.prg:       $(UTILDIR)/megagus/modplay.c $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s $(CC65_DEPEND)
+	$(call mbuild_header,$@)
+	$(CL65) -O -o $*.prg --mapfile $*.map $< $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s
+
 $(UTILDIR)/mega65_config.prg:       $(UTILDIR)/mega65_config.o $(CC65_DEPEND)
 	$(call mbuild_header,$@)
 	$(LD65) $< -Ln $*.label -vm --mapfile $*.map -o $*.prg

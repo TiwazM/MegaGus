@@ -38,9 +38,31 @@ What it keeps is the idea; what it changes:
   ramp), voices stopped without a fade, and the chord had C3, E3 and G3 as sines next to
   each other, which beat (in the model its level on the left fluttered by a quarter at
   66 Hz; spread wide, by about 2 %). The program now avoids each of these. On the machine
-  (heard 2026-11-24) the sounds are clean but for a faint trace still heard in the chord,
-  which has not yet been compared with the model's recording.
-- No player and no emulator support yet.
+  (heard 2026-11-24, over its analogue audio output) the sounds are clean but for a faint
+  trace still heard in the chord. The model's recording of the chord, which is what the
+  engine puts out on the machine, does not have it when played on a computer: it arises
+  after the mixer, in the core's audio output.
+- The cause of that trace was in the core, not in MegaGus: the board's top level
+  (`mega65r6.vhdl`, the `audio_counter` process) passed the mixer's output to the DAC's
+  clock 47 943 times a second, not 48 000, because its counter did not count in the clock
+  where it wraps. Engine and DAC both run at 48 000, so 57 times a second a frame of the
+  engine's was skipped and one was sent twice. A model of that path puts a 57 Hz buzz on
+  the chord, 24 to 35 dB below it depending on how the DAC's frames happen to lie against
+  the engine's (which drifts over about half an hour); with the counter corrected the
+  model's path is exact. The R6 top level now has it corrected (one line), and that core
+  builds and meets timing. Heard on the machine (2026-11-24): the chord played five times
+  on the corrected core was fine, and the uncorrected core, built from the same sources and
+  heard right after, was clearly worse, in the chord and in the other sounds too. The other
+  boards' top levels have the same counter and were left alone.
+- A [MOD player](#mod-player) (2026-11-24). On this computer, against the model: its
+  self-test passes (145 checks, the cc65 build in cc65's simulator writing the engine exactly
+  what the native build writes), and the first minute of seven real modules with 4, 6 and 8
+  channels plays without clipping, the two builds again alike on the two compared. On the R6
+  the same day: it lists the SD card's modules, loads them (one read back from the sample
+  RAM was the file, byte for byte; 306 KB take under three seconds) and plays at the right
+  tempo; a tune made here, an 8-channel and a 4-channel module were heard and sounded right.
+  Nobody has compared its playing with ProTracker's or another player's.
+- No emulator support yet.
 
 ## Where it is
 
@@ -226,8 +248,9 @@ A test that fails says what it read and what it expected (in hex). All of this i
 Then, after a key, nine things to hear, each announced on the screen: a 440 Hz tone in the
 middle, left, right, moving from left to right, fading out and in, a scale, the tone from a
 16-bit sample, four drum hits left and right, and a chord on all 32 voices (C major spread
-over four octaves, each note four times). None of them should click, crackle or distort. Afterwards any key but `Q` plays them again. (Typing `RUN`
-again does not work, as with any cc65 program of this kind: load it again instead.)
+over four octaves, each note four times). None of them should click, crackle or distort.
+Afterwards any key but `Q` plays them again. (Typing `RUN` again does not work, as with any
+cc65 program of this kind: load it again instead.)
 
 What it should sound like is in `src/tests/megagus/work/megagustest.wav` after
 
@@ -240,9 +263,85 @@ The program without MegaGus says so and stops ("no megagus in this core"). Its o
 memory routines can be tried in an emulator: built with `-DATTIC_SELFTEST` it runs its RAM
 test on the attic RAM instead.
 
+## MOD player
+
+`src/utilities/megagus/modplay.prg` plays ProTracker-style modules from the SD card:
+
+    make USE_LOCAL_CC65=1 src/utilities/megagus/modplay.prg
+
+It is a C64-mode program, loaded and run like the test program. It lists the files named
+`*.mod` or `mod.*` in the SD card's current directory (the first 44): cursor up and down,
+RETURN plays, `Q` leaves. While a module plays, SPACE pauses, `+` and `-` skip to the next
+and the previous position, `V` changes the timing (below), `Q` stops it. The screen shows
+the module's title, its sample names (often its text: the first 17 whole) and where the
+song is.
+
+**What it plays.** Modules with 31 samples and 4 channels (`M.K.`, `M!K!`, `FLT4`, `4CHN`)
+or more (`6CHN`, `8CHN`, `OCTA`, `CD81`, `xxCH`, up to 31), as big as the sample RAM
+(512 KB). Not S3M, XM or IT, and not the old 15-sample modules.
+
+**How.** The whole file is copied into the sample RAM as it is. The samples are played from
+where they lie in the file, and each row of a pattern is read from there when its turn
+comes, so the player keeps nothing but the 1084-byte header. A channel is a voice. To start
+a note it stops the voice, writes PAN to END with one DMA copy and starts it: the engine
+never sees a new position with an old end. Volume and pitch changes are written as they
+happen. A sample's loop is the voice's START and END, with POS at the sample's beginning.
+
+Voice 31 is the clock. It plays nothing (VOL 0) round the first 64 KB, one byte an output
+frame, so the low 16 bits of its POS count frames at 48 kHz; a tick of the song is
+`120000 / BPM` of them, kept to 1/256 of a frame. The tempo therefore doesn't depend on the
+video mode or the CIA, and pausing the engine pauses the song.
+
+The master volume is `128 / channels`: every channel at full level on one side cannot clip.
+Channels are panned as on an Amiga (left, right, right, left) but less far apart, at 64
+and 192.
+
+**Commands.** 0 arpeggio, 1 and 2 slides, 3 tone portamento, 4 vibrato, 5, 6, 7 tremolo,
+9 sample offset, A volume slide, B position jump, C volume, D pattern break, F speed and
+tempo; E1 and E2 fine slides, E4 and E7 waveforms (sine, ramp, square), E5 finetune, E6
+pattern loop, E9 retrigger, EA and EB fine volume, EC note cut, ED note delay, EE pattern
+delay. 8 and E8 set the pan, but not in a ProTracker (`M.K.`, `M!K!`, `FLT4`) module, where
+they are not commands. Not done: E0 (the Amiga's filter), E3 (glissando), EF (invert loop),
+and the swap to another sample without a new note.
+
+**Timing.** An F command below 32 is a speed (ticks a row), from 32 up a tempo (beats a
+minute): ProTracker's CIA timing. Modules from before that mean a speed by every F, and
+some say so in their sample names ("play with vblank"). `V` switches to that VBlank timing
+and back: 50 ticks a second, whatever F says. It can't be told from the file, so a module
+starts with CIA timing. The player keeps both readings of the song's F commands as it plays,
+so `V` in the middle of a song gives the speed and tempo the other timing would have had
+from the start. It only makes a difference in a module with an F of 32 or more.
+
+Two things are not as ProTracker has them, neither by more than a period unit: a finetuned
+note's period is the plain one times `2^(-finetune/96)`, not from its table, and an
+arpeggio's notes are the period times `2^(-n/12)`. Slides stop at periods 113 and 856 in a
+ProTracker module, at 28 and 3424 in the others.
+
+**On this computer.** The same source runs here against the engine's model:
+
+    python3 src/utilities/megagus/modplay_host.py FILE.mod       plays it into work/FILE.wav
+    python3 src/utilities/megagus/modplay_host.py --selftest
+
+(`--vblank` for VBlank timing.) The self-test makes four test modules (`makemod.py`: every
+command in turn, each with what the engine must then have been told), plays them with the player built by this computer's
+compiler and again with the cc65 build in cc65's simulator (`sim65`: 16-bit ints, as on the
+MEGA65), checks all of it against the engine's registers at each tick, and wants both builds
+to have written exactly the same to the engine. `makemod.py` also makes `work/demo.mod`,
+half a minute of music of its own to listen to.
+
+What that does not test: the parts only a MEGA65 has (the file list, loading from the SD
+card, the screen and the keys), and whether the commands are understood as ProTracker
+understands them where the test modules and the player share a misreading.
+
+Reading the MEGA65's screen or memory through the serial monitor while a module plays stops
+the CPU each time, and the song with it: the voices hold their notes meanwhile. After a
+stop of more than a sixth of a second the player goes on from where it is and does not
+hurry through the ticks it missed.
+
 ## Not there (yet)
 
-- Interrupts. Poll RUNNING, ENDED or POS; time a player with a raster or CIA interrupt.
+- Interrupts. Poll RUNNING, ENDED or POS; time a player with a raster or CIA interrupt, or
+  with a voice's POS as the [MOD player](#mod-player) does.
 - More than 512 KB. The registers have room for 16 MB; the attic RAM would have to be
   shared with the CPU and be fast enough for 32 voices.
 - Per-voice ramp rates, volume envelopes, filters (which IT modules want).
@@ -259,6 +358,9 @@ test on the attic RAM instead.
 | `src/vhdl/test_megagus_bus.vhdl`        | Testbench: the engine in `slow_devices.vhdl`      |
 | `src/tests/megagus/megagustest.c`       | The test program for the MEGA65                   |
 | `src/tests/megagus/megagustest_host.py` | The same program on this computer, with the model |
+| `src/utilities/megagus/modplay.c`       | The MOD player                                    |
+| `src/utilities/megagus/modplay_host.py` | The player on this computer, and its self-test    |
+| `src/utilities/megagus/makemod.py`      | The test modules and a tune of its own            |
 
 ## Tests
 

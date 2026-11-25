@@ -1092,6 +1092,7 @@ static const u8 sine[32] = { 0,   24,  49,  74,  97,  120, 141, 161, 180, 197, 2
 
 static u8 c_smp[MAXCH];    /* the sample the channel's next note plays, 0: none yet */
 static u8 c_play[MAXCH];   /* the sample its voice is playing */
+static u8 v_ctrl[MAXCH];   /* its voice's CTRL without RUN: what its sample is made of */
 static u8 c_vol[MAXCH];    /* 0..64 */
 static u8 c_ft[MAXCH];
 static u8 c_pan[MAXCH];
@@ -1536,9 +1537,17 @@ static void flush(u8 ch)
 }
 
 /* Start the channel's sample, offs frames in. The voice is stopped while its registers
-   change (one copy, PAN to END), so the engine never sees a new position with an old end.
+   change (one copy, CTRL to END), so the engine never sees a new position with an old end.
    play_at(.., 1): past the end of a loop is as far round it. */
 static void play_at(u8 ch, u32 offs, u8 round);
+
+/* Stop the channel's voice. Only RUN goes: the voice still sounds while its level comes
+   down, and with 16-BIT or UNSIGNED gone as well the engine would take what is left of the
+   sample for another kind of sample, a full swing of the output for as long. */
+static void stop(u8 ch)
+{
+  wr(V(ch) + CTRL, v_ctrl[ch]);
+}
 
 static void play(u8 ch, u32 offs)
 {
@@ -1554,7 +1563,7 @@ static void play_at(u8 ch, u32 offs, u8 round)
 
   c_play[ch] = smp;
   if (smp == 0 || s_end[smp] <= s_pos[smp] || c_per[ch] == 0) {
-    wr(V(ch) + CTRL, 0);
+    stop(ch);
     return;
   }
   offs >>= s_shift[smp];
@@ -1569,7 +1578,7 @@ static void play_at(u8 ch, u32 offs, u8 round)
     en = s_lend[smp];
     if (pos >= en) {
       if (fmt == F_XM) { /* FastTracker plays nothing from past the end, loop or not */
-        wr(V(ch) + CTRL, 0);
+        stop(ch);
         return;
       }
       pos = round ? st + (pos - st) % (en - st) : st;
@@ -1578,10 +1587,10 @@ static void play_at(u8 ch, u32 offs, u8 round)
       pos &= ~1UL;
   }
   else if (pos >= en) { /* an offset past the end: nothing to play */
-    wr(V(ch) + CTRL, 0);
+    stop(ch);
     return;
   }
-  regs[0] = o_pan[ch] = pan_now(ch);
+  regs[1] = o_pan[ch] = pan_now(ch);
   p = period_now(ch);
   o_per[ch] = p;
   vol16 = level_now(ch);
@@ -1589,14 +1598,16 @@ static void play_at(u8 ch, u32 offs, u8 round)
   vu[ch] = (u8)(vol16 >> 10);
   if (fmt == F_XM)
     vu[ch] += (u8)(vu[ch] >> 2); /* an XM's level stops at 0.71 of the others' */
-  regs[1] = (u8)(vol16 & 0xFF);
-  regs[2] = (u8)(vol16 >> 8);
-  put24(regs + 3, freq_of(ch, p));
-  put24(regs + 6, pos);
-  put24(regs + 9, st);
-  put24(regs + 12, en);
-  wr(V(ch) + CTRL, 0);
-  mg_put(MG_REG + V(ch) + PAN, regs, 15);
+  regs[2] = (u8)(vol16 & 0xFF);
+  regs[3] = (u8)(vol16 >> 8);
+  put24(regs + 4, freq_of(ch, p));
+  put24(regs + 7, pos);
+  put24(regs + 10, st);
+  put24(regs + 13, en);
+  /* all sixteen in one copy, CTRL first and without RUN: the voice is stopped before its
+     position changes, and is the new sample's kind from then on */
+  regs[0] = v_ctrl[ch] = (u8)(ctrl & (u8)~RUN);
+  mg_put(MG_REG + V(ch) + CTRL, regs, 16);
   wr(V(ch) + CTRL, ctrl);
 }
 
@@ -3570,7 +3581,7 @@ static void silence(void)
 {
   u8 ch;
   for (ch = 0; ch < channels; ch++)
-    wr(V(ch) + CTRL, 0);
+    stop(ch);
 }
 
 /* Which clock this engine gives the player */
@@ -3626,6 +3637,7 @@ static void song_start(void)
 
   memset(c_smp, 0, sizeof c_smp);
   memset(c_play, 0, sizeof c_play);
+  memset(v_ctrl, 0, sizeof v_ctrl);
   memset(c_vol, 0, sizeof c_vol);
   memset(c_per, 0, sizeof c_per);
   memset(c_target, 0, sizeof c_target);

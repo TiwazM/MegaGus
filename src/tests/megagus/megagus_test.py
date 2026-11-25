@@ -48,6 +48,7 @@ class MegaGus:
         self.par = [bytearray(16) for _ in range(NVOICES)]
         self.pos = [0] * NVOICES            # byte address << 16 | fraction
         self.vol = [0] * NVOICES
+        self.hold = [0] * NVOICES           # the last value each voice put out while it ran
         self.pos_snap = 0
         self.frames_snap = 0
         self.reset()
@@ -105,7 +106,7 @@ class MegaGus:
         if g == 1:
             return 0x47
         if g == 2:
-            return 2
+            return 3                        # 3: a stopped voice fades its last value
         if g == 3:
             return (1 << self.ram_bits) // 65536
         if g == 4:
@@ -240,14 +241,21 @@ class MegaGus:
             else:
                 ncv = tgt
 
-            # the two samples
-            if sh:
-                s0 = s16(self._byte(sp * 2) | (self._byte(sp * 2 + 1) ^ flip) << 8)
-                s1 = s16(self._byte(i1 * 2) | (self._byte(i1 * 2 + 1) ^ flip) << 8)
+            # the two samples. Once the voice has stopped, what fades is the last value it put
+            # out while it ran: nothing the CPU writes to it or to its sample then (another
+            # kind of sample in CTRL, the next note's START and END) can reach the output
+            # before RUN is set again
+            if run:
+                if sh:
+                    s0 = s16(self._byte(sp * 2) | (self._byte(sp * 2 + 1) ^ flip) << 8)
+                    s1 = s16(self._byte(i1 * 2) | (self._byte(i1 * 2 + 1) ^ flip) << 8)
+                else:
+                    s0 = s8(self._byte(sp) ^ flip) << 8
+                    s1 = s8(self._byte(i1) ^ flip) << 8
+                interp = s0 + (((s1 - s0) * frac) >> 16)
+                self.hold[v] = interp
             else:
-                s0 = s8(self._byte(sp) ^ flip) << 8
-                s1 = s8(self._byte(i1) ^ flip) << 8
-            interp = s0 + (((s1 - s0) * frac) >> 16)
+                interp = self.hold[v]
             vv = (interp * cv) >> 16
             accl += (vv * (255 - pan)) >> 8
             accr += (vv * pan) >> 8
@@ -443,6 +451,29 @@ def build(ram_bits, seed):
     s.reg(1, CTRL, RUN | LOOP)          # on from where it stopped
     s.reg(5, POS, 0x480, 3)             # a jump inside the loop
     s.frames(100)
+
+    # a stopped voice fades the last value it put out, whatever is written to it meanwhile:
+    # CTRL without its 16-BIT and UNSIGNED, another position, other ends, other samples
+    s.w(G_RAMP, 0x04)                   # a slow fade, to see it
+    s.voice(9, RUN | LOOP | BIT16 | UNSIGNED, 0x300, 0x300, 0x3C0, f(0.7), 0xFFFF, 0x60)
+    s.frames(120)
+    s.reg(9, CTRL, 0)
+    s.frames(7)
+    s.reg(9, POS, 0x1234, 3)
+    s.frames(7)
+    s.reg(9, START, 0x1000, 3)
+    s.reg(9, END, 0x1100, 3)
+    s.frames(7)
+    for a in range(0x300, 0x3C0):
+        s.w(a, a & 0xFF, ram=1)
+    s.reg(9, CTRL, BIT16)
+    s.frames(7)
+    s.reg(9, CTRL, RUN | LOOP)          # and on, as 8 bits, from the new position
+    s.frames(60)
+    s.reg(9, CTRL, LOOP | UNSIGNED)
+    s.frames(300)                       # all the way down
+    s.status(9)
+    s.w(G_RAMP, 0x40)
 
     # the ramp: instant, slowest, fastest
     for ramp in (0x00, 0x01, 0xFF):

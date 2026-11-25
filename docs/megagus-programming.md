@@ -93,7 +93,10 @@ at `$000400` for POS, START and END. Low byte first throughout.
 
 To start a sound, in this order:
 
-1. write 0 to CTRL (the voice stops while you set it up);
+1. write 0 to CTRL (the voice stops while you set it up; what it last played fades for a
+   millisecond meanwhile, whatever you write. On an engine before version 3 of an unsigned
+   or 16-bit sample clear bit 0 only and leave the others: there they say how the sample
+   is read during that millisecond);
 2. write PAN, VOL, FREQ, START and END;
 3. write POS, low byte first: the write to its third byte is what sets it;
 4. write CTRL: 1 to play once to END, 3 to loop between START and END.

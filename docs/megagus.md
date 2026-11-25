@@ -97,6 +97,14 @@ What it keeps is the idea; what it changes:
   list, the folders, the four screens, pause, the position keys, leaving and a second `RUN`
   work there. Heard by a capture card. How long a tick takes the real CPU was not measured:
   the songs keep their time over 44 seconds.
+- A stopped voice fades the last value it put out, and nothing written to it meanwhile is
+  heard (2026-11-26, VERSION 3; [why](#voice-registers)). The VHDL and the model agree on
+  it, the R6 core builds and meets timing (worst slack 0.048 ns), and on the R6 the test
+  program's 12 tests pass. ZEN.S3M recorded there over HDMI, with the player that still
+  stopped voices with CTRL = 0: 3 frames in 44 seconds stand out from their neighbours by
+  more than the sound's rms (`spikes.py`), where the recording of the day before, on
+  VERSION 2, has 17 (the VERSION 2 model's output has 17 by the same count, and 4 with a
+  player that clears RUN alone). With that player on VERSION 3: 3.
 - No emulator support yet.
 
 ## Where it is
@@ -163,14 +171,14 @@ for the reads of +8 and +9 that follow: read low, middle, high.
 its level going to VOL. Forward, it acts when the position reaches END; backward, when it
 falls below START:
 
-- no LOOP: it stops (RUN reads 0, ENDED reads 1), holding its last sample while its level
-  ramps to nothing;
+- no LOOP: it stops (RUN reads 0, ENDED reads 1), and the last value it put out fades as
+  its level ramps to nothing;
 - LOOP: it continues from START (backward: from END);
 - LOOP and PINGPONG: it turns round.
 
 POS may start before START: a sample's attack plays once, then its loop. Between samples the
 output is interpolated linearly; at the end of a forward loop toward the loop's first
-sample, at any other end the last sample is held.
+sample, at any other end toward the last sample itself.
 
 Writing RUN = 0 stops the voice where it is: POS keeps its place, the level ramps to
 nothing, and RUN = 1 carries on from there. Any write to CTRL clears ENDED.
@@ -182,13 +190,33 @@ A write to CTRL or POS is never lost, wherever in a frame it falls: the voice pl
 the next frame on. A VOL, FREQ, START or END caught between two of its bytes plays that
 one frame with the old and new bytes mixed; stop the voice first where that matters.
 
+**A stopped voice still sounds** until its level is down (1.3 ms at the RAMP it starts
+with). What fades is the last value the voice put out while it ran (from VERSION 3): the
+engine reads neither the voice's registers nor its sample again until RUN is set. So
+writing 0 to CTRL stops any voice cleanly, and the next note's registers and samples can be
+written at once, in any order, with CTRL last.
+
+Before VERSION 3 the engine went on reading the sample at the voice's position as CTRL said
+then, for as long as the fade took. Writing 0 to CTRL took 16-BIT and UNSIGNED away with
+RUN, and what was left of an unsigned or 16-bit sample was played as a signed 8-bit one: a
+jump of half the full swing, for a frame or more. The module player did that until
+2026-11-25, at every note that began on a channel still sounding: in 60 seconds of ZEN.S3M
+(unsigned samples) the model's output had 26 big spikes of one frame each that libopenmpt's
+playing of it has nothing like. Found by ear, as a faint click at the ends of notes. It
+was put right twice over: the player now clears RUN alone and keeps the other bits, which
+is clean on a VERSION 2 engine too; and the engine was changed, on which the old player's
+writes play as cleanly (what a search for such frames still finds, either way, is a
+cymbal, 30 ms apart in the two players). On the R6 it shows in recordings over HDMI: see
+[Status](#status). A count of such frames means something only next to a reference:
+PAGER11.XM has over a hundred in 40 seconds on any engine, and as many in libopenmpt.
+
 ## Global registers
 
 | Address    | Name    | R/W | Reset | What                                                    |
 |------------|---------|-----|-------|---------------------------------------------------------|
 | `$EFFF200` | ID      | R   | `$4D` | "M"                                                     |
 | `$EFFF201` | ID      | R   | `$47` | "G"                                                     |
-| `$EFFF202` | VERSION | R   | `$02` | 2: with FRAMES                                          |
+| `$EFFF202` | VERSION | R   | `$03` | 2: with FRAMES; 3: a stopped voice fades its last value |
 | `$EFFF203` | RAMSIZE | R   | `$08` | Sample RAM in units of 64 KB                            |
 | `$EFFF204` | CONTROL | R/W | `$01` | Bit 0: engine on. Bit 7 (write): reset the engine       |
 | `$EFFF205` | MASTER  | R/W | `$20` | Master volume: `$40` is the sum as it is                |
@@ -352,8 +380,9 @@ Not IT, not the old 15-sample modules, and of an S3M not the AdLib instruments.
 **How.** The whole file is copied into the MEGA65's attic RAM (`$8000000`) as it is, and the
 samples from there into the sample RAM, one after the other. Each row of a pattern is read
 from the attic RAM when its turn comes, so the player itself keeps little more than the
-header. A channel is a voice. To start a note it stops the voice, writes PAN to END with one
-DMA copy and starts it: the engine never sees a new position with an old end. Volume and
+header. A channel is a voice. To start a note it writes CTRL to END with one DMA copy, CTRL
+first and without RUN but with the new sample's 16-BIT and UNSIGNED, and then starts it: the
+engine never sees a new position with an old end, nor a sample as another kind of sample. Volume and
 pitch changes are written as they happen. A sample's loop is the voice's START and END, with
 POS at the sample's beginning. An S3M's rows are packed, each as long as what is in it: the
 player notes where each row of the playing pattern began as it comes to it, and for a jump
@@ -772,6 +801,7 @@ hurry through the ticks it missed.
 | `src/utilities/megagus/xmfile.py`       | XMs read and written, for tests and comparison    |
 | `src/utilities/megagus/modcompare.py`   | The player against libopenmpt, channel by channel |
 | `src/utilities/megagus/hwcompare.py`    | A recording of the MEGA65 against the model       |
+| `src/utilities/megagus/spikes.py`       | Counts one-frame spikes in a recording or render  |
 | `docs/megagus-programming.md`           | How to use it from BASIC, C and assembly          |
 | `src/examples/megagus/`                 | The programs that guide goes through              |
 
@@ -782,8 +812,9 @@ hurry through the ticks it missed.
 needs [nvc](https://github.com/nickg/nvc) and Python 3. It runs a script of some 60 000
 register and sample RAM accesses through the VHDL: every kind of voice (8 and 16 bits,
 signed and unsigned, each loop mode, both directions), changes while they play, the ramp,
-the master volume, clipping, both resets, then random accesses at random clocks, in the
-middle of the engine's work on the same voice too. The model replays each access at the
+the master volume, clipping, both resets, a stopped voice written to while it fades, then
+random accesses at random clocks, in the middle of the engine's work on the same voice
+too. The model replays each access at the
 clock edge the VHDL took it and has to agree on every one of 30 000 output frames and on
 every byte read back. A second testbench reaches the engine through `slow_devices.vhdl` as
 the CPU does.

@@ -113,7 +113,8 @@ end entity;
 architecture rtl of megagus is
 
   constant NVOICES : integer := 32;
-  constant VERSION : unsigned(7 downto 0) := x"02";  -- 2: the frame counter
+  -- 2: the frame counter; 3: a stopped voice fades the last value it put out
+  constant VERSION : unsigned(7 downto 0) := x"03";
 
   -- Voice registers (the CPU writes, the engine and the CPU read): 16 bytes a voice
   type par_t is array(0 to NVOICES-1) of unsigned(127 downto 0);
@@ -124,11 +125,18 @@ architecture rtl of megagus is
   type vol_t is array(0 to NVOICES-1) of unsigned(15 downto 0);
   signal st_pos : pos_t := (others => (others => '0'));
   signal st_vol : vol_t := (others => (others => '0'));
+  -- The last interpolated sample each voice put out while it ran. Once the voice has
+  -- stopped, that is what fades: the CPU may then write the voice's registers and its
+  -- sample for the next note (another kind of sample in CTRL, other ends) without any of
+  -- it reaching the output before RUN is set again.
+  type hold_t is array(0 to NVOICES-1) of signed(15 downto 0);
+  signal st_hold : hold_t := (others => (others => '0'));
 
   attribute ram_style : string;
   attribute ram_style of par    : signal is "distributed";
   attribute ram_style of st_pos : signal is "distributed";
   attribute ram_style of st_vol : signal is "distributed";
+  attribute ram_style of st_hold : signal is "distributed";
 
   signal running   : std_logic_vector(NVOICES-1 downto 0) := (others => '0');
   signal dirv      : std_logic_vector(NVOICES-1 downto 0) := (others => '0');
@@ -538,6 +546,11 @@ begin
             s1(15) := not s1(15);
           end if;
           sdiff := resize(s1, 17) - resize(s0, 17);
+          if w_run = '0' then
+            -- stopped: not the sample RAM's bytes, the value it last put out
+            s0 := st_hold(vi);
+            sdiff := (others => '0');
+          end if;
           w_s0 <= s0;
           m_a <= resize(sdiff, 24);
           m_b <= signed(resize(w_frac, 18));
@@ -551,6 +564,9 @@ begin
           interp := resize(w_s0, 18) + resize(shift_right(m_p, 16), 18);
           m_a <= resize(interp, 24);
           m_b <= signed(resize(w_cv, 18));
+          if w_run = '1' then
+            st_hold(vi) <= interp(15 downto 0);
+          end if;
           step <= 13;
 
         when 13 =>

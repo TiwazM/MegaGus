@@ -308,7 +308,7 @@ modules (S3M) and FastTracker 2 modules (XM) from the SD card:
     make USE_LOCAL_CC65=1 src/utilities/megagus/MODPLAY.D81
 
 That makes the program (`modplay.prg`), its four overlays (`MODPLAY.OV1` to `MODPLAY.OV4`)
-and a disk image with the five on it (51 KB, 207 of its 3160 blocks). Put `MODPLAY.D81` on
+and a disk image with the five on it (51 KB, 208 of its 3160 blocks). Put `MODPLAY.D81` on
 the SD card, mount it, and in C64 mode `LOAD"*",8` and `RUN`. Or put the five files
 themselves into one directory of the SD card and load the program as the test program is
 loaded. When it starts it looks for its overlays on the disk in the drive it came from,
@@ -334,7 +334,11 @@ there are four screens, on F1, F3, F5 and F7:
 SPACE pauses, `+` and `-` go to the next and the previous position, `,` and `.` make it
 quieter and louder, `V` changes a MOD's timing (below), ESC goes back to the list. Above
 the screens are the song's name and kind, and its position, pattern, row, speed, tempo and
-the time played.
+the time played, and next to the names of the screens the volume: a bar and a number in
+percent of the level the song began with (the engine's MASTER, which the player sets by
+the number of channels so that the song does not clip). The bar is green up to that level
+and yellow beyond it, to half as much again: there the loudest places may distort. The
+volume is the song's own again with the next song.
 
 **What it plays.** MODs with 31 samples and 4 channels (`M.K.`, `M!K!`, `FLT4`, `4CHN`) or
 more (`6CHN`, `8CHN`, `OCTA`, `CD81`, `xxCH`, up to 32); S3Ms with up to 32 channels and up
@@ -708,7 +712,8 @@ could not be `RUN` a second time (above, "In parts"), and left to BASIC's `BREAK
 RUN/STOP was still down. And the MEGA65 keeps what is typed at BASIC at `$D610` until a
 program reads it (an `R` typed there was still there), so the `RUN` and its RETURN were the
 list's first keys: it now empties that before it looks. The second build was loaded, left,
-`RUN` again and played `kill.xm` as before (0.983).
+`RUN` again and played `kill.xm` as before (0.983). A third has the volume bar: on the
+machine it went from 100 % to 129 % (into the yellow), down to 62 % and back with the keys.
 
 `big.s3m`, the megabyte of samples: the screen says "2 smaller", and the four notes are at
 440.2, 440.2, 130.7 and 440.2 Hz in the recording, as in the model and in libopenmpt. It

@@ -1154,6 +1154,7 @@ static u16 pat_rows = 64;  /* rows in the pattern that is playing */
 
 static u8 vu[MAXCH];       /* for the screen: how loud a channel's last note began, 0..64 */
 static u8 master;          /* the engine's MASTER as the song has it */
+static u8 master_own;      /* and as it was before the keys changed it */
 /* and a pattern row as the screen shows it: the note (0: none, 1: C-0, 253: key up, 254: cut),
    the instrument, the volume column (0xFF: none), the command as a screen code (0: none), its
    argument */
@@ -3602,7 +3603,7 @@ static void song_start(void)
   }
   if (m < 2)
     m = 2;
-  master = m;
+  master = master_own = m;
   wr(G_MASTER, m);
 
   memset(x_ins, 0, sizeof x_ins);
@@ -4383,17 +4384,39 @@ static u8 channel_ins(u8 ch)
   return (u8)(fmt == F_XM ? x_ins[ch] : c_smp[ch]);
 }
 
+#define VOL_AT 54
+#define VOL_WIDE 12
+#define VOL_OWN 8
+
 static void show_tabs(void)
 {
+  u8 i, n;
+  u16 w;
+
   l_new();
   lx = 1;
   l_text("F1 Channels   F3 Samples   F5 Pattern   F7 Help");
+  /* the volume against the song's own (the engine's MASTER as the song began with it): a
+     bar in half columns, of which VOL_OWN columns are the song's own and green, and the
+     rest, to half as much again, yellow: there it may be too much. And in percent. */
+  lx = 50;
+  l_text("Vol ");
+  w = ((u16)master * (2 * VOL_OWN) + (master_own >> 1)) / master_own;
+  n = (u8)(w > 2 * VOL_WIDE ? 2 * VOL_WIDE : w);
+  for (i = 0; i < VOL_WIDE; i++)
+    line[lx++] = (u8)(2 * i + 1 < n ? 0xA0 : 2 * i < n ? 0x61 : 0x2D);
+  lx++;
+  w = ((u16)master * 100 + (master_own >> 1)) / master_own;
+  l_num((u16)(w > 999 ? 999 : w), 3, 0x20);
+  line[lx++] = 0x25;
   if (paused) {
     lx = 72;
     l_text("paused");
   }
   l_reverse(tab_at[view], tab_wide[view]);
   l_out(3);
+  colour(3, VOL_AT, VOL_OWN, GREEN);
+  colour(3, VOL_AT + VOL_OWN, VOL_WIDE - VOL_OWN, YELLOW);
 }
 
 static void show_position(void)
@@ -4601,7 +4624,7 @@ static const char *const help[] = {
   "",
   "Space         pause, and on",
   "+ and -       the next position of the song, the one before",
-  ", and .       quieter, louder",
+  ", and .       quieter, louder: the Vol bar; yellow is above the song's own",
   "Cursor keys   more channels, more samples",
   "V             a MOD's timing: tempo commands, or all speeds (old modules)",
   "Esc           back to the list",
@@ -4836,10 +4859,12 @@ static void play_song(void)
     case 0x2C: /* , */
       master = (u8)(master > 2 ? master - 2 : 1);
       wr(G_MASTER, master);
+      show_tabs();
       break;
     case 0x2E: /* . */
       master = (u8)(master < 126 ? master + 2 : 127);
       wr(G_MASTER, master);
+      show_tabs();
       break;
     case 0x76: /* v */
       if (fmt == F_MOD) {

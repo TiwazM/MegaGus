@@ -35,6 +35,7 @@ ACCESS = 10e-6          # a far peek or poke with the DMA, from C
 PER_BYTE = 0.3e-6       # a DMA copy, a byte
 IDLE = 0.25e-3          # the player found no tick due and looked again this much later
 RAM, REG = 0xE000000, 0xEFFF000
+ATTIC, ATTIC_SIZE = 0x8000000, 0x800000     # where the player keeps the module's file
 
 
 def build(sim):
@@ -54,8 +55,10 @@ def build(sim):
 class Run:
     """One playing of a module: the sound, the rows it went through, every register write"""
 
-    def __init__(self, mod, sim=False, limit=600.0, vblank=False, switch=0):
+    def __init__(self, mod, sim=False, limit=600.0, vblank=False, switch=0, voice_clock=False):
         self.m = MegaGus(19)
+        self.attic = bytearray(ATTIC_SIZE)
+        attic = self.attic
         self.left, self.right = [], []
         self.rows = []          # (frame, order, pattern, row, speed, bpm)
         self.writes = []        # (frame, register address in the block, value)
@@ -70,13 +73,22 @@ class Run:
                 self.right.append(r)
 
         def write(a, v):
-            if a < REG:
+            if ATTIC <= a < ATTIC + ATTIC_SIZE:
+                attic[a - ATTIC] = v
+            elif a < REG:
                 m.write(1, a - RAM, v)
             else:
                 m.write(0, a - REG, v)
                 self.writes.append((len(self.left), a - REG, v))
 
-        p = subprocess.Popen(build(sim) + (["-v"] if vblank else []) + ([f"-v{switch}"] if switch else []) + [mod], stdin=subprocess.PIPE,
+        def read(a):
+            if ATTIC <= a < ATTIC + ATTIC_SIZE:
+                return attic[a - ATTIC]
+            return m.read(1, a - RAM) if a < REG else m.read(0, a - REG)
+
+        # voice_clock: keep time with voice 31, as the player does on an engine of version 1
+        p = subprocess.Popen(build(sim) + (["-v"] if vblank else []) + ([f"-v{switch}"] if switch else []) +
+                             (["-k"] if voice_clock else []) + [mod], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, text=True)
         for line in p.stdout:
             op, _, rest = line.rstrip("\n").partition(" ")
@@ -87,7 +99,7 @@ class Run:
                 now += ACCESS
                 run_until(now)
                 a = int(rest, 16)
-                v = m.read(1, a - RAM) if a < REG else m.read(0, a - REG)
+                v = read(a)
                 p.stdin.write(f"{v:x}\n")
                 p.stdin.flush()
             elif op == "W":
@@ -106,7 +118,7 @@ class Run:
                 a, n = int(a, 16), int(n)
                 now += ACCESS + PER_BYTE * n
                 run_until(now)
-                p.stdin.write(" ".join(f"{m.read(1, a - RAM + i):x}" for i in range(n)) + "\n")
+                p.stdin.write(" ".join(f"{read(a + i):x}" for i in range(n)) + "\n")
                 p.stdin.flush()
             elif op == "M":
                 self.rows.append((len(self.left),) + tuple(int(x) for x in rest.split()))
@@ -292,8 +304,62 @@ def selftest():
             failed = True
         else:
             print("  both builds told the engine exactly the same")
+    failed |= selftest_s3m(work)
     print("FAIL" if failed else "PASS")
     sys.exit(1 if failed else 0)
+
+
+def selftest_s3m(work):
+    """The S3M test modules (makes3m.py): both builds must tell the engine the same, and the
+    samples of the one that is too big for the sample RAM must still sound at their pitch.
+    Whether the commands are played right is modcompare.py's to say."""
+    subprocess.run([sys.executable, os.path.join(HERE, "makes3m.py")], check=True)
+    failed = False
+    for test in ("test", "test_it", "test_300"):
+        traces = []
+        for sim in (False, True):
+            r = Run(os.path.join(work, test + ".s3m"), sim)
+            trace = os.path.join(work, test + ("_s3m_sim.trace" if sim else "_s3m_host.trace"))
+            r.trace(trace)
+            traces.append(open(trace).read())
+            peak = max(max(map(abs, r.left)), max(map(abs, r.right)))
+            failed |= r.code != 0 or peak >= 32767 or len(r.rows) < 150
+        same = traces[0] == traces[1]
+        print(f"{test}.s3m: {len(r.rows)} rows, peak {peak}; both builds told the engine "
+              f"{'exactly the same' if same else 'DIFFERENT things'}")
+        failed |= not same
+    # the older clock, a silent voice: the song has to come out the same
+    for name in ("test.mod", "test.s3m"):
+        a = Run(os.path.join(work, name))
+        b = Run(os.path.join(work, name), voice_clock=True)
+        # the same rows, each beginning within half a millisecond of the other's (the player
+        # looks at its clock every quarter of one here)
+        same = ([x[1:] for x in a.rows] == [x[1:] for x in b.rows] and
+                max(abs(x[0] - y[0]) for x, y in zip(a.rows, b.rows)) <= 24)
+        print(f"{name}: timed by the engine's frame counter and by a voice, "
+              f"{'the same song' if same else 'NOT the same'}")
+        failed |= not same
+    for name in ("big_signed.s3m",):        # the making smaller, in the cc65 build too
+        a, b = Run(os.path.join(work, name)), Run(os.path.join(work, name), sim=True)
+        same = a.left == b.left and a.right == b.right and "2 samples made smaller" in " ".join(b.said)
+        print(f"{name}: both builds {'sound exactly the same' if same else 'DIFFER'}")
+        failed |= not same
+    r = Run(os.path.join(work, "big.s3m"))
+    said = " ".join(r.said)
+
+    def hz(x):
+        ups = [i for i in range(len(x) - 1) if x[i] < 0 <= x[i + 1]]
+        return (len(ups) - 1) * RATE / (ups[-1] - ups[0]) if len(ups) > 1 else 0.0
+
+    # rows 4..12 of each 16: the 16-bit sample (left), the long one (right), the loop (left),
+    # the long one again from 32768 frames in
+    got = []
+    for first, side, want in ((0, r.left, 440.0), (16, r.right, 440.0), (32, r.left, 8363 / 64), (48, r.right, 440.0)):
+        a, b = r.rows[first + 4][0], r.rows[first + 12][0]
+        got.append((hz(side[a:b]), want, max(map(abs, side[a:b]))))
+    ok = "2 samples made smaller" in said and all(abs(f - want) < 0.5 and peak > 5000 for f, want, peak in got)
+    print(f"big.s3m: {said}; " + ", ".join(f"{f:.1f} Hz" for f, _, _ in got) + (" as they should be" if ok else " WRONG"))
+    return failed or not ok
 
 
 def main():

@@ -54,14 +54,32 @@ What it keeps is the idea; what it changes:
   on the corrected core was fine, and the uncorrected core, built from the same sources and
   heard right after, was clearly worse, in the chord and in the other sounds too. The other
   boards' top levels have the same counter and were left alone.
-- A [MOD player](#mod-player) (2026-11-24). On this computer, against the model: its
+- A [MOD player](#module-player) (2026-11-24). On this computer, against the model: its
   self-test passes (145 checks, the cc65 build in cc65's simulator writing the engine exactly
   what the native build writes), and the first minute of seven real modules with 4, 6 and 8
   channels plays without clipping, the two builds again alike on the two compared. On the R6
   the same day: it lists the SD card's modules, loads them (one read back from the sample
   RAM was the file, byte for byte; 306 KB take under three seconds) and plays at the right
   tempo; a tune made here, an 8-channel and a 4-channel module were heard and sounded right.
-  Nobody has compared its playing with ProTracker's or another player's.
+- The player [against libopenmpt](#module-player) (2026-11-24, on this computer): over the
+  first minute of nine modules every row is the same row and as long, and all but 32 of
+  111 476 ticks agree in pitch (within 5 cents) and level (within 0.5 dB). It found six
+  things in the player, which are fixed; one row is unexplained.
+- The module player plays S3M as well, keeps the file in the attic RAM and makes samples
+  smaller when they are more than the sample RAM holds (2026-11-25). On this computer: the
+  self-test passes, and over the first 40 seconds of ten real S3Ms with 4 to 16 channels
+  every one of 4 755 rows is the same row and as long as in libopenmpt, and 106 525 of
+  106 719 ticks agree in pitch and level; what differs is nearly all the level of single
+  ticks in steep volume slides (see [there](#module-player)).
+- The engine has a frame counter, FRAMES at `$EFFF214` (2026-11-25, VERSION 2): the VHDL and
+  the model agree on it, and the R6 core with it builds and meets timing (WNS +0.113 ns).
+  The player keeps time by it, which leaves all 32 voices for channels.
+- On the R6, with that core and that player (2026-11-25): FRAMES went up by 175 929 in 3.67
+  s. Four S3Ms and three MODs were played and recorded over HDMI, and every second of each
+  recording has the spectrum and the level of what the model plays for the same module
+  (`hwcompare.py`): 16 channels and 549 KB among them, one saved by Impulse Tracker, and a
+  module with a megabyte of samples of which two were made smaller on the machine and still
+  sound at 440.2 Hz. Heard by nobody yet: by a capture card.
 - No emulator support yet.
 
 ## Where it is
@@ -153,7 +171,7 @@ one frame with the old and new bytes mixed; stop the voice first where that matt
 |------------|---------|-----|-------|---------------------------------------------------------|
 | `$EFFF200` | ID      | R   | `$4D` | "M"                                                     |
 | `$EFFF201` | ID      | R   | `$47` | "G"                                                     |
-| `$EFFF202` | VERSION | R   | `$01` |                                                         |
+| `$EFFF202` | VERSION | R   | `$02` | 2: with FRAMES                                          |
 | `$EFFF203` | RAMSIZE | R   | `$08` | Sample RAM in units of 64 KB                            |
 | `$EFFF204` | CONTROL | R/W | `$01` | Bit 0: engine on. Bit 7 (write): reset the engine       |
 | `$EFFF205` | MASTER  | R/W | `$20` | Master volume: `$40` is the sum as it is                |
@@ -162,6 +180,7 @@ one frame with the old and new bytes mixed; stop the voice first where that matt
 | `$EFFF208` | RUNNING | R   | 0     | 4 bytes, a bit a voice (voice 0 is bit 0 of `$EFFF208`) |
 | `$EFFF20C` | ENDED   | R/W | 0     | 4 bytes, a bit a voice; write 1 to clear                |
 | `$EFFF210` | RATE    | R   | 48000 | 2 bytes: output frames a second                         |
+| `$EFFF214` | FRAMES  | R/W | 0     | 4 bytes: frames played; a write to `$EFFF214` clears it |
 
 To find it, read `$EFFF200` and `$EFFF201`: on a core without MegaGus they don't read
 "MG".
@@ -170,6 +189,17 @@ To find it, read `$EFFF200` and `$EFFF201`: on a core without MegaGus they don't
 output is silent, until it is set again. Writing bit 7 does what the reset line does: all
 voices stop at once and CONTROL, MASTER and RAMP go back to their reset values. The voice
 registers and the sample RAM keep what they hold through either.
+
+**FRAMES** is the engine's own timer: it goes up by one with every output frame, 48 000
+times a second, in step with the sound, and so is a clock for whatever plays music on the
+engine (the [module player](#module-player) counts its ticks off it). It stands still
+while the engine is switched off (CONTROL bit 0), as the voices do, so a paused song stays
+where it is. A read of `$EFFF214` returns the lowest byte and holds the other three for the
+reads of `$EFFF215` to `$EFFF217` that follow, so the four belong to the same moment; one
+or two bytes are enough for most (two go round every 1.365 s). A write of any value to
+`$EFFF214` starts it from 0, and so does a reset. It is there from VERSION 2; before that a
+silent voice had to be the clock (a voice with VOL 0 and FREQ `$010000` moves its POS a
+byte a frame).
 
 **MASTER** scales the sum of all voices: `out = sum * MASTER / 64`, clipped to 16 bits. A
 voice at full VOL with a full-scale sample, panned hard to one side, is full scale there
@@ -194,18 +224,8 @@ PAN is linear, so a voice in the centre is at half level on each side.
 
 ## A first sound
 
-BASIC 65 (this listing has not been run): a 64-byte sine in the sample RAM,
-looped by voice 0 at 440 Hz.
-
-    10 M=$E000000:R=$EFFF000
-    20 FOR I=0 TO 63:V=INT(127*SIN(I/32*3.14159)):IF V<0 THEN V=V+256
-    30 POKE M+I,V:NEXT
-    40 POKE R+1,128:POKE R+2,255:POKE R+3,255:REM PAN, VOL
-    50 F=INT(440*64*65536/48000):REM A 64-SAMPLE WAVE, 440 TIMES A SECOND
-    60 POKE R+4,F-256*INT(F/256):POKE R+5,INT(F/256):POKE R+6,0
-    70 FOR I=7 TO 15:POKE R+I,0:NEXT:POKE R+13,64:REM POS 0, START 0, END 64
-    80 POKE R+9,0:POKE R,3:REM COMMIT POS; RUN + LOOP
-    90 GETKEY A$:POKE R,2:REM STOP
+[Programming MegaGus](megagus-programming.md) goes from an empty program to notes, loops,
+fades and timing, in BASIC 65, C and assembly, with examples in `src/examples/megagus/`.
 
 ## Test program
 
@@ -263,48 +283,94 @@ The program without MegaGus says so and stops ("no megagus in this core"). Its o
 memory routines can be tried in an emulator: built with `-DATTIC_SELFTEST` it runs its RAM
 test on the attic RAM instead.
 
-## MOD player
+## Module player
 
-`src/utilities/megagus/modplay.prg` plays ProTracker-style modules from the SD card:
+`src/utilities/megagus/modplay.prg` plays ProTracker-style modules and Scream Tracker 3
+modules (S3M) from the SD card:
 
     make USE_LOCAL_CC65=1 src/utilities/megagus/modplay.prg
 
 It is a C64-mode program, loaded and run like the test program. It lists the files named
-`*.mod` or `mod.*` in the SD card's current directory (the first 44): cursor up and down,
-RETURN plays, `Q` leaves. While a module plays, SPACE pauses, `+` and `-` skip to the next
-and the previous position, `V` changes the timing (below), `Q` stops it. The screen shows
-the module's title, its sample names (often its text: the first 17 whole) and where the
-song is.
+`*.mod`, `mod.*` or `*.s3m` in the SD card's current directory (the first 44): cursor up and
+down, RETURN plays, `Q` leaves. While a module plays, SPACE pauses, `+` and `-` skip to the
+next and the previous position, `V` changes a MOD's timing (below), `Q` stops it. The screen
+shows the module's title, its sample names (often its text: the first 17 whole) and where
+the song is.
 
-**What it plays.** Modules with 31 samples and 4 channels (`M.K.`, `M!K!`, `FLT4`, `4CHN`)
-or more (`6CHN`, `8CHN`, `OCTA`, `CD81`, `xxCH`, up to 31), as big as the sample RAM
-(512 KB). Not S3M, XM or IT, and not the old 15-sample modules.
+**What it plays.** MODs with 31 samples and 4 channels (`M.K.`, `M!K!`, `FLT4`, `4CHN`) or
+more (`6CHN`, `8CHN`, `OCTA`, `CD81`, `xxCH`, up to 32), and S3Ms with up to 32 channels
+and up to 99 samples. The file can be as big as the attic RAM (8 MB).
+Not XM or IT, not the old 15-sample modules, and of an S3M not the AdLib instruments.
 
-**How.** The whole file is copied into the sample RAM as it is. The samples are played from
-where they lie in the file, and each row of a pattern is read from there when its turn
-comes, so the player keeps nothing but the 1084-byte header. A channel is a voice. To start
-a note it stops the voice, writes PAN to END with one DMA copy and starts it: the engine
-never sees a new position with an old end. Volume and pitch changes are written as they
-happen. A sample's loop is the voice's START and END, with POS at the sample's beginning.
+**How.** The whole file is copied into the MEGA65's attic RAM (`$8000000`) as it is, and the
+samples from there into the sample RAM, one after the other. Each row of a pattern is read
+from the attic RAM when its turn comes, so the player itself keeps little more than the
+header. A channel is a voice. To start a note it stops the voice, writes PAN to END with one
+DMA copy and starts it: the engine never sees a new position with an old end. Volume and
+pitch changes are written as they happen. A sample's loop is the voice's START and END, with
+POS at the sample's beginning. An S3M's rows are packed, each as long as what is in it: the
+player notes where each row of the playing pattern began as it comes to it, and for a jump
+into rows it has not seen it reads its way there.
 
-Voice 31 is the clock. It plays nothing (VOL 0) round the first 64 KB, one byte an output
-frame, so the low 16 bits of its POS count frames at 48 kHz; a tick of the song is
-`120000 / BPM` of them, kept to 1/256 of a frame. The tempo therefore doesn't depend on the
-video mode or the CIA, and pausing the engine pauses the song.
+**More samples than sample RAM.** When a module's samples are more than the 512 KB, the
+biggest are made smaller as they are copied, until all fit: a 16-bit sample is kept as
+8-bit; when there are no more of those, a sample is kept at half its rate (two frames
+averaged into one), and when all are, at a quarter. A sample with a loop shorter than 512
+frames is left alone, since halving that would put it out of tune. The voice plays a
+smaller sample at half or a quarter of the speed, so it sounds at its pitch, duller. The
+screen says how many were made smaller. (XTC-Play does the like on a GUS with 512 KB.)
 
-The master volume is `128 / channels`: every channel at full level on one side cannot clip.
-Channels are panned as on an Amiga (left, right, right, left) but less far apart, at 64
-and 192.
+The clock is the engine's frame counter (FRAMES): the player reads its low 16 bits, and a
+tick of the song is `120000 / BPM` frames, kept to 1/256 of a frame. The tempo therefore
+doesn't depend on the video mode or the CIA, and pausing the engine pauses the song. All 32
+voices are free for channels. On an engine of version 1, which has no counter, voice 31 is
+the clock instead (it plays nothing, VOL 0, round the first 64 KB, a byte a frame, and its
+POS is read) and a module can have 31 channels.
 
-**Commands.** 0 arpeggio, 1 and 2 slides, 3 tone portamento, 4 vibrato, 5, 6, 7 tremolo,
+The master volume of a MOD is `128 / channels`: every channel at full level on one side
+cannot clip. Its channels are panned as on an Amiga (left, right, right, left) but less far
+apart, at 64 and 192. An S3M with many channels never has them all at full level, and would
+be very quiet by that rule: its master volume is `96 / channels + 8`. Its channels are left
+and right as the file says (at `$33` and `$CC`, or by its table of pans; all in the middle
+if it is a mono module).
+
+**A MOD's commands.** 0 arpeggio, 1 and 2 slides, 3 tone portamento, 4 vibrato, 5, 6, 7 tremolo,
 9 sample offset, A volume slide, B position jump, C volume, D pattern break, F speed and
 tempo; E1 and E2 fine slides, E4 and E7 waveforms (sine, ramp, square), E5 finetune, E6
 pattern loop, E9 retrigger, EA and EB fine volume, EC note cut, ED note delay, EE pattern
 delay. 8 and E8 set the pan, but not in a ProTracker (`M.K.`, `M!K!`, `FLT4`) module, where
 they are not commands. Not done: E0 (the Amiga's filter), E3 (glissando), EF (invert loop),
-and the swap to another sample without a new note.
+and the swap to another sample without a new note (but a sample named with a tone
+portamento does start if the voice is silent).
 
-**Timing.** An F command below 32 is a speed (ticks a row), from 32 up a tempo (beats a
+**An S3M's commands.** A speed, B position jump, C pattern break, D volume slide (with its
+fine forms `DxF` and `DFx`), E and F slides (fine `EFx`, extra fine `EEx`), G tone
+portamento, H vibrato, I tremor, J arpeggio, K and L (a volume slide with the vibrato or the
+portamento going on), O sample offset, Q retrigger with its volume change, R tremolo, T
+tempo, U fine vibrato, V the song's volume, X pan; S2 a rate from the finetune table, S3 and
+S4 waveforms, S8 pan, SB pattern loop, SC note cut, SD note delay, SE pattern delay; a
+volume or a pan in the volume column, `^^^` to cut a note; the `+++` and `---` markers in
+the list of positions. Channels the patterns never use get no voice (modules often declare
+all 32 and play on eight). Not done: AdLib instruments, the right half of a stereo sample,
+S1 (glissando), SA, SF.
+
+How an S3M is played depends on what made it, and the player follows libopenmpt in that
+(read off it with small modules made for the purpose):
+
+- Saved by Impulse Tracker: notes are tuned exactly; each kind of command remembers its own
+  last argument (volume slides, pitch slides, tremor, arpeggio, retrigger and the S commands
+  one each); a sample number with no note starts that sample at once, at the pitch the
+  channel is at.
+- Saved by Scream Tracker 3: notes come from its table of twelve periods (up to 4 cents from
+  exact); D, E, F, I, J, K, L, Q, R and S share one remembered argument; version 3.00 slides
+  the volume on a row's first tick too. A sample number with no note only sets the volume,
+  as on a GUS, but in 3.00's modules and in 3.20's made with a Sound Blaster it starts the
+  sample, as above.
+- In all of them a tempo counts from the tick that sets it, a vibrato and a tremolo sound
+  on a row's first tick where they stand, the tremolo is half as deep as a MOD's, and the
+  ramp waveform goes the other way.
+
+**A MOD's timing.** An F command below 32 is a speed (ticks a row), from 32 up a tempo (beats a
 minute): ProTracker's CIA timing. Modules from before that mean a speed by every F, and
 some say so in their sample names ("play with vblank"). `V` switches to that VBlank timing
 and back: 50 ticks a second, whatever F says. It can't be told from the file, so a module
@@ -312,26 +378,149 @@ starts with CIA timing. The player keeps both readings of the song's F commands 
 so `V` in the middle of a song gives the speed and tempo the other timing would have had
 from the start. It only makes a difference in a module with an F of 32 or more.
 
-Two things are not as ProTracker has them, neither by more than a period unit: a finetuned
-note's period is the plain one times `2^(-finetune/96)`, not from its table, and an
-arpeggio's notes are the period times `2^(-n/12)`. Slides stop at periods 113 and 856 in a
-ProTracker module, at 28 and 3424 in the others.
+**A MOD's pitch.** Notes are tuned by ProTracker's own table (its periods for the octave C-1 to B-1
+at each finetune; the other octaves are halves and doubles of those, at finetune 0
+ProTracker's own). An arpeggio's notes come from the same table, and one that reaches above
+B-3 in a ProTracker module wraps to the table's start as it does there. Periods are kept in
+quarters, so a vibrato is four times finer than an Amiga's. Slides stop at periods 113 and
+856 in a ProTracker module, at 28 and 3424 in the others. In a ProTracker module a vibrato
+row's first tick is at the plain pitch; in the others the vibrato sounds there too. A tone
+portamento goes to the last note given with 3 or 5 and stops for good once it is there. A
+new tempo counts from the tick after the one that sets it, but on the song's first row.
 
 **On this computer.** The same source runs here against the engine's model:
 
     python3 src/utilities/megagus/modplay_host.py FILE.mod       plays it into work/FILE.wav
     python3 src/utilities/megagus/modplay_host.py --selftest
 
-(`--vblank` for VBlank timing.) The self-test makes four test modules (`makemod.py`: every
-command in turn, each with what the engine must then have been told), plays them with the player built by this computer's
-compiler and again with the cc65 build in cc65's simulator (`sim65`: 16-bit ints, as on the
-MEGA65), checks all of it against the engine's registers at each tick, and wants both builds
-to have written exactly the same to the engine. `makemod.py` also makes `work/demo.mod`,
-half a minute of music of its own to listen to.
+(`--vblank` for VBlank timing; the attic RAM is the harness's.) The self-test makes four
+test MODs (`makemod.py`: every command in turn, each with what the engine must then have
+been told), plays them with the player built by this computer's compiler and again with the
+cc65 build in cc65's simulator (`sim65`: 16-bit ints, as on the MEGA65), checks all of it
+against the engine's registers at each tick, and wants both builds to have written exactly
+the same to the engine. `makemod.py` also makes `work/demo.mod`, half a minute of music of
+its own to listen to.
+
+For S3M it makes three test modules (`makes3m.py`: the commands in turn, once as Scream
+Tracker 3.20 would save it, once as Impulse Tracker and once as Scream Tracker 3.00) and
+wants the two builds to write the same for each; what the commands should do is the
+comparison's to say (below). A fourth, `big.s3m`, has a megabyte of samples: the player has
+to make its 16-bit sample 8-bit and halve another, and each must still sound at 440 Hz; a
+fifth is the same with signed samples, and the two builds must sound exactly alike on it.
+(These tests found a cc65 build that panned wrongly where the host's build did not.) Last,
+a MOD and an S3M are played with the clock an engine of version 1 has, a silent voice
+(`-k`), and must come out as the same song.
 
 What that does not test: the parts only a MEGA65 has (the file list, loading from the SD
 card, the screen and the keys), and whether the commands are understood as ProTracker
-understands them where the test modules and the player share a misreading.
+understands them where the test modules and the player share a misreading. For that there
+is the next.
+
+**Against another player.** `modcompare.py` plays a module with modplay (on the model) and
+with [libopenmpt](https://lib.openmpt.org/) (`brew install libopenmpt`), which is the
+reference for how modules sound:
+
+    python3 src/utilities/megagus/modcompare.py FILE.mod [--seconds 60] [--waves]
+
+It compares the timeline (the same rows in the same order, each as long) and then every
+channel by itself: the module is written out with every sample made a pure tone and the
+other channels' notes removed, both players play it, and for every tick of every row the
+pitch and the level are read off the two recordings. A tick agrees within 5 cents and
+0.5 dB. Where they don't, the row and its command are listed. (`--waves` also lays the
+waveforms of the module's own samples over each other, which shows sample offsets and
+loops, but drops out at the slightest difference in pitch.)
+
+The first minute of nine modules (2026-11-24, libopenmpt 0.8.10): the two test modules
+of the self-test and seven real ones with 4, 6 and 8 channels. All 5 863 rows are the same
+row and as long in both players. Of 111 476 sounding ticks 111 444 agree. Of the 32 that
+don't, 25 differ in level only, on a tick where the volume changes (see below), and 7 are
+one row of one module, a tone portamento with no note that libopenmpt slides by 15 cents
+and modplay leaves where it is; why was not found.
+
+(Run again on 2026-11-25, with the file in the attic RAM and the engine's frame counter as
+the clock: the same 111 444 of 111 476.)
+
+The comparison is what made the player's pitch what it is now. Before it, a finetuned note
+could be 4 cents off and an arpeggio's notes 6 (computed, not from ProTracker's table),
+a vibrato had a quarter of the resolution, an arpeggio above B-3 played a wrong note, a
+tone portamento could slide when it should not, and a tempo change came one tick early.
+
+**S3Ms against libopenmpt** (2026-11-25, the first 40 seconds, 5 cents and 0.5 dB). The
+three test modules of `makes3m.py`: 3 875 of 3 875 ticks as Scream Tracker 3.20 saves it,
+3 884 of 3 887 as 3.00, 3 881 of 3 887 as Impulse Tracker. Ten real modules:
+
+| Module        | Made with        | Channels | Ticks that agree   |
+|---------------|------------------|----------|--------------------|
+| sun.s3m       | Scream Tracker   | 4        | 7 650 of 7 651     |
+| RCDROPS.S3M   | Scream Tracker   | 8        | 11 003 of 11 013   |
+| anamnesis.s3m | Scream Tracker   | 6        | 6 968 of 6 976     |
+| abfi.s3m      | Scream Tracker   | 14       | 18 398 of 18 398   |
+| monolife.s3m  | Scream Tracker   | 9        | 10 483 of 10 502   |
+| ZEN.S3M       | Scream Tracker   | 16       | 13 973 of 13 973   |
+| DELERIUM.S3M  | Impulse Tracker  | 4        | 8 292 of 8 323     |
+| ERR5000.S3M   | Impulse Tracker  | 8        | 4 249 of 4 288     |
+| NUKKU.S3M     | Impulse Tracker  | 12       | 4 805 of 4 849     |
+| CHEESE.S3M    | Impulse Tracker  | 14       | 20 704 of 20 746   |
+
+All 4 755 rows are the same row and as long. What is left:
+
+- Volume slides (D, K), 148 ticks, level only. In an S3M libopenmpt glides from one tick's
+  volume to the next across the whole tick, as a GUS's volume ramp does; the engine is
+  there in a millisecond. The comparison allows for the glide (it compares the reference
+  with where it would be if it were heading for modplay's level), and what remains are
+  steep slides at low volumes where that reckoning is off by more than half a dB.
+- Long pitch slides in Impulse Tracker's modules (E, F), 39 ticks in ERR5000 and 4 in the
+  test: libopenmpt keeps the pitch of those in whole Hertz and loses a fraction of a period
+  on every tick of a slide, up to 6 periods after twenty ticks in the test; modplay slides
+  by exactly the periods the command says.
+- A sample number with no note, 7 ticks in DELERIUM and 3 in the tests: the tick the new
+  sample starts on, where libopenmpt fades the old one out and the pitch cannot be read.
+
+An S3M's overall level is the player's choice (libopenmpt takes the file's mixing volume,
+modplay the number of voices), so levels are compared against each channel's usual
+difference. Left and right were compared on the test module: the share on the right is
+the same to three decimals for the file's own pans and for the X, S8 and volume-column
+pans.
+
+What the comparison cannot settle, because the two players differ on purpose: libopenmpt
+makes a tick a whole number of output frames (705 for the 705.88 of tempo 170), modplay
+keeps the fraction, as an Amiga's timer nearly does, so at such tempos the two drift apart
+by up to a tenth of a percent; libopenmpt glides to a new volume over most of a tick, the
+engine in a millisecond; and libopenmpt's highest note is period 113.25, ProTracker's and
+modplay's 113.
+
+**On the machine** (2026-11-25, R6, the core with FRAMES, by a USB capture card on HDMI
+and `m65rs live record`). `hwcompare.py RECORDING.wav MODEL.wav` lays a recording over what
+the model plays: second by second, how alike the spectra are (1 is the same; two different
+songs gave 0.44 and 0.50), the level, and the share on the right. Not sample by sample:
+the player on the machine looks at its clock a fraction of a millisecond earlier or later
+than the one on the model, and the capture card is not exact either (it adds a few units
+of noise and samples by its own clock, some 22 parts in a million off the MEGA65's, as
+MEGA65 Studio's own check of it found).
+
+| Module        | What it shows                          | Spectrum, median (lowest) | Level  |
+|---------------|----------------------------------------|---------------------------|--------|
+| SUN.S3M       | an S3M, mono                           | 0.969 (0.952)             | 0.8 dB |
+| ZEN.S3M       | 16 channels, 549 KB, stereo            | 0.944 (0.913)             | 0.9 dB |
+| DELERIUM.S3M  | saved by Impulse Tracker               | 0.974 (0.964)             | 0.2 dB |
+| ROYAL.MOD     | a MOD, 6 channels, tempo 170           | 0.998 (0.971)             | 1.0 dB |
+| FINKEL.MOD    | a MOD, 4 channels                      | 0.943 (0.844)             | 0.8 dB |
+| DEMO.MOD      | a ProTracker MOD                       | 0.959 (0.937)             | 0.2 dB |
+
+`big.s3m`, the megabyte of samples: the screen says "2 smaller", and the four notes are at
+440.2, 440.2, 130.7 and 440.2 Hz in the recording, as in the model and in libopenmpt. It
+loads in about 8 seconds, most of it reading the SD card; the making smaller took over
+half a minute before its two common cases were written without 32-bit sums. The attic RAM
+and the sample RAM read back from the machine after loading ROYAL.MOD were the file and
+its samples, byte for byte. Loading an 18 KB module takes 0.2 s.
+
+Two things about the machine that are not MegaGus's:
+
+- Over HDMI the MEGA65's mixer gives each side a third of the other: a voice panned hard
+  left arrives at 1.00 left and 0.34 right. A module is that much narrower there than the
+  engine makes it (ZEN's share on the right: 0.37 in the model, 0.44 recorded).
+- With "DVI" set (`$D61A` bit 1, as this machine's configuration has it) HDMI carries no
+  sound at all. For the recordings the bit was cleared until the next reset.
 
 Reading the MEGA65's screen or memory through the serial monitor while a module plays stops
 the CPU each time, and the song with it: the voices hold their notes meanwhile. After a
@@ -340,8 +529,8 @@ hurry through the ticks it missed.
 
 ## Not there (yet)
 
-- Interrupts. Poll RUNNING, ENDED or POS; time a player with a raster or CIA interrupt, or
-  with a voice's POS as the [MOD player](#mod-player) does.
+- Interrupts. Poll RUNNING, ENDED, POS or FRAMES; time a player with a raster or CIA
+  interrupt, or off FRAMES as the [module player](#module-player) does.
 - More than 512 KB. The registers have room for 16 MB; the attic RAM would have to be
   shared with the CPU and be fast enough for 32 voices.
 - Per-voice ramp rates, volume envelopes, filters (which IT modules want).
@@ -358,9 +547,14 @@ hurry through the ticks it missed.
 | `src/vhdl/test_megagus_bus.vhdl`        | Testbench: the engine in `slow_devices.vhdl`      |
 | `src/tests/megagus/megagustest.c`       | The test program for the MEGA65                   |
 | `src/tests/megagus/megagustest_host.py` | The same program on this computer, with the model |
-| `src/utilities/megagus/modplay.c`       | The MOD player                                    |
+| `src/utilities/megagus/modplay.c`       | The module player (MOD and S3M)                   |
 | `src/utilities/megagus/modplay_host.py` | The player on this computer, and its self-test    |
-| `src/utilities/megagus/makemod.py`      | The test modules and a tune of its own            |
+| `src/utilities/megagus/makemod.py`      | The test MODs and a tune of its own               |
+| `src/utilities/megagus/makes3m.py`      | The test S3Ms, one too big for the sample RAM     |
+| `src/utilities/megagus/modcompare.py`   | The player against libopenmpt, channel by channel |
+| `src/utilities/megagus/hwcompare.py`    | A recording of the MEGA65 against the model       |
+| `docs/megagus-programming.md`           | How to use it from BASIC, C and assembly          |
+| `src/examples/megagus/`                 | The programs that guide goes through              |
 
 ## Tests
 

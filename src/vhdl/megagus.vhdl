@@ -18,7 +18,8 @@
 --     +10-12  START  loop start (byte address)
 --     +13-15  END    loop/sample end, exclusive (byte address)
 --   Globals from offset $200: ID, version, RAM size, control, master volume, ramp rate,
---   the running and ended bitmaps, the output rate.
+--   the running and ended bitmaps, the output rate, and from $214 a count of the frames
+--   played: a clock for whatever plays music on it, 48 000 to the second.
 --
 -- One frame (an output sample) is 17 clocks a sounding voice, one clock an idle one, and four
 -- for the master volume: 548 of the 843 that 40.5 MHz gives a 48 kHz frame.
@@ -112,7 +113,7 @@ end entity;
 architecture rtl of megagus is
 
   constant NVOICES : integer := 32;
-  constant VERSION : unsigned(7 downto 0) := x"01";
+  constant VERSION : unsigned(7 downto 0) := x"02";  -- 2: the frame counter
 
   -- Voice registers (the CPU writes, the engine and the CPU read): 16 bytes a voice
   type par_t is array(0 to NVOICES-1) of unsigned(127 downto 0);
@@ -142,6 +143,10 @@ architecture rtl of megagus is
   signal g_master : unsigned(7 downto 0) := x"20";
   signal g_ramp   : unsigned(7 downto 0) := x"40";
   signal soft_reset : std_logic := '0';
+  -- The frames played since the reset, or since $214 was last written: it stands still
+  -- while the engine is switched off, as the voices do
+  signal g_frames : unsigned(31 downto 0) := (others => '0');
+  signal frames_snap : unsigned(23 downto 0) := (others => '0');
 
   -- The bus
   signal req_seen  : std_logic := '0';
@@ -318,6 +323,7 @@ begin
           -- Between frames
           if tick then
             if g_enable = '1' then
+              g_frames <= g_frames + 1;
               vidx <= (others => '0');
               accl <= (others => '0');
               accr <= (others => '0');
@@ -727,6 +733,16 @@ begin
                 when 15 => rd := unsigned(endflag(31 downto 24));
                 when 16 => rd := rate16(7 downto 0);
                 when 17 => rd := rate16(15 downto 8);
+                when 20 =>
+                  -- the frame count as it is now; its other three bytes are held for the
+                  -- reads that follow
+                  rd := g_frames(7 downto 0);
+                  if b_write = '0' then
+                    frames_snap <= g_frames(31 downto 8);
+                  end if;
+                when 21 => rd := frames_snap(7 downto 0);
+                when 22 => rd := frames_snap(15 downto 8);
+                when 23 => rd := frames_snap(23 downto 16);
                 when others => null;
               end case;
               if b_write = '1' then
@@ -736,6 +752,7 @@ begin
                     soft_reset <= b_wdata(7);       -- as the reset line: all voices off
                   when 5 => g_master <= b_wdata;
                   when 6 => g_ramp <= b_wdata;
+                  when 20 => g_frames <= (others => '0');   -- any value: count from here
                   when 12 | 13 | 14 | 15 =>
                     -- a 1 clears that voice's ended flag
                     for i in 0 to 7 loop
@@ -783,6 +800,7 @@ begin
         g_enable <= '1';
         g_master <= x"20";
         g_ramp <= x"40";
+        g_frames <= (others => '0');
         audio_left <= (others => '0');
         audio_right <= (others => '0');
       end if;

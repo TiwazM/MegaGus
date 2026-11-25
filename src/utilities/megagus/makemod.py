@@ -82,8 +82,9 @@ class Mod:
 
 
 def sample_offsets(mod):
-    """Where each sample (1..) lies in the file"""
-    at = 1084 + len(mod.patterns) * 64 * 4 * mod.channels
+    """Where each sample (1..) lies in the sample RAM: the player puts them there one after
+    the other, from the bottom"""
+    at = 0
     where = {}
     for i, (name, data, ft, vol, ls, ll) in enumerate(mod.samples, 1):
         where[i] = at
@@ -95,7 +96,8 @@ def sample_offsets(mod):
 # The test module
 # -----------------------------------------------------------------------------------------------
 def freq(per):
-    return 4842694 // per
+    """FREQ for a period, which the player keeps in quarters"""
+    return 19370776 // round(per * 4)
 
 
 def vol16(v):
@@ -195,15 +197,15 @@ def make_test():
 
     o, p, r = rows(2)
     m.put(p, r, 0, "C-2", SINE, 0x4, 0x48)
-    for t, d in enumerate((0, 0, 6, 11, 14, 15)):
+    for t, d in enumerate((0, 0, 24 / 4, 45 / 4, 58 / 4, 63 / 4)):     # the sine times 8 / 32, in quarters
         at(o, r, t, "freq", freq(P + d), "4xy: vibrato")
     m.put(p, r + 1, 0, fx=0x4, arg=0)
-    for t, d in ((0, 15), (1, 14), (2, 11), (5, -6)):
+    for t, d in ((0, 0), (1, 58 / 4), (2, 45 / 4), (5, -24 / 4)):       # tick 0: the plain period
         at(o, r + 1, t, "freq", freq(P + d), "400: vibrato goes on")
 
     o, p, r = rows(1)
     m.put(p, r, 0, "C-2", SINE, 0x0, 0x47)
-    for t, per in enumerate((428, 340, 286, 428, 340, 286)):
+    for t, per in enumerate((428, 339, 285, 428, 339, 285)):          # C-2, E-2, G-2 of the table
         at(o, r, t, "freq", freq(per), "0xy: arpeggio")
 
     o, p, r = rows(3)
@@ -228,7 +230,7 @@ def make_test():
     o, p, r = rows(2)
     m.put(p, r, 0, "C-2", SINE, 0x4, 0x48)
     m.put(p, r + 1, 0, fx=0x6, arg=0x04)
-    at(o, r + 1, 2, "freq", freq(P + 11), "6xy: the vibrato goes on")
+    at(o, r + 1, 2, "freq", freq(P + 45 / 4), "6xy: the vibrato goes on")
     at(o, r + 1, 5, "vol", vol16(44), "6xy: and the volume slides")
 
     off = None                  # the samples' places are known once all patterns exist
@@ -277,12 +279,12 @@ def make_test():
     m.put(p, r, 1, fx=0xF, arg=3)
     at(o, r, 0, "row frames", 3 * 960, "F03: three ticks a row")
     m.put(p, r + 1, 1, fx=0xF, arg=150)
-    at(o, r + 1, 0, "row frames", 3 * 800, "F96: 150 beats a minute")
+    at(o, r + 1, 0, "row frames", 960 + 2 * 800, "F96: 150 beats a minute, from the next tick on")
     m.put(p, r + 2, 1, fx=0xE, arg=0xE2)
     at(o, r + 2, 0, "row frames", 9 * 800, "EEx: the row three times as long")
     m.put(p, r + 3, 1, fx=0xF, arg=6)
     m.put(p, r + 3, 2, fx=0xF, arg=125)
-    at(o, r + 3, 0, "row frames", 6 * 960, "speed and tempo back")
+    at(o, r + 3, 0, "row frames", 800 + 5 * 960, "speed and tempo back")
 
     o, p, r = rows(3)
     m.put(p, r, 0, "C-2", SINE)
@@ -396,10 +398,11 @@ def make_test_switch():
         return [{"name": n, "order": 0, "row": r, "tick": 0, "voice": 0, "what": "row frames", "value": f}
                 for r, (f, n) in enumerate(zip(frames, names))]
 
-    on = rows([CIA, CIA, VBL, 6 * 960, 6 * 960],
+    # the change is at a row's start, and like a tempo command counts from the tick after
+    on = rows([CIA, CIA, 1875 + 63 * 960, 6 * 960, 6 * 960],
               ["F40 as a tempo: 64", "and the next row", "V pressed: F40 was a speed, 64 ticks at 50 Hz",
                "F06 in VBlank timing", "and the next row"])
-    off = rows([VBL, VBL, CIA, CIA, CIA],
+    off = rows([VBL, VBL, 960 + 5 * 1875, CIA, CIA],
                ["F40 as a speed: 64 ticks", "and the next row", "V pressed: F40 was a tempo, speed is 6 again",
                 "F06 changes nothing then", "and the next row"])
     return m, on, off

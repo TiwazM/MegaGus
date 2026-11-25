@@ -25,7 +25,7 @@ RUN, LOOP, BIDI, BIT16, BACK, UNSIGNED, ENDED = 1, 2, 4, 8, 16, 32, 128
 # globals
 G_ID, G_VERSION, G_RAMSIZE, G_CONTROL, G_MASTER, G_RAMP, G_VOICES = (
     0x200, 0x202, 0x203, 0x204, 0x205, 0x206, 0x207)
-G_ACTIVE, G_ENDED, G_RATE = 0x208, 0x20C, 0x210
+G_ACTIVE, G_ENDED, G_RATE, G_FRAMES = 0x208, 0x20C, 0x210, 0x214
 
 
 def sat16(x):
@@ -49,6 +49,7 @@ class MegaGus:
         self.pos = [0] * NVOICES            # byte address << 16 | fraction
         self.vol = [0] * NVOICES
         self.pos_snap = 0
+        self.frames_snap = 0
         self.reset()
 
     def reset(self):
@@ -63,6 +64,7 @@ class MegaGus:
         self.enable = 1
         self.master = 0x20
         self.ramp = 0x40
+        self.frames = 0                     # played since the reset, or since $214 was written
         self.out = (0, 0)
 
     # ---------------------------------------------------------------------------------------
@@ -103,7 +105,7 @@ class MegaGus:
         if g == 1:
             return 0x47
         if g == 2:
-            return 1
+            return 2
         if g == 3:
             return (1 << self.ram_bits) // 65536
         if g == 4:
@@ -122,6 +124,11 @@ class MegaGus:
             return self.rate & 0xFF
         if g == 17:
             return self.rate >> 8
+        if g == 20:                         # the low byte holds the other three
+            self.frames_snap = self.frames >> 8
+            return self.frames & 0xFF
+        if 21 <= g <= 23:
+            return (self.frames_snap >> (8 * (g - 21))) & 0xFF
         return 0
 
     def write(self, ram, addr, data):
@@ -152,6 +159,8 @@ class MegaGus:
             self.master = data
         elif g == 6:
             self.ramp = data
+        elif g == 20:
+            self.frames = 0
         elif 12 <= g <= 15:
             for i in range(8):
                 if data >> i & 1:
@@ -177,6 +186,7 @@ class MegaGus:
         if not self.enable:
             self.out = (0, 0)
             return
+        self.frames = (self.frames + 1) & 0xFFFFFFFF
         accl = accr = 0
         edge = 1
         for v in range(NVOICES):
@@ -330,6 +340,10 @@ class Script:
         self.reg(v, POS, pos, 3)
         self.reg(v, CTRL, ctrl)
 
+    def count(self):
+        for a in range(G_FRAMES, G_FRAMES + 4):
+            self.r(a)
+
     def status(self, v=None):
         for a in range(G_ACTIVE, G_ACTIVE + 8):
             self.r(a)
@@ -387,7 +401,7 @@ def build(ram_bits, seed):
     f = lambda x: int(x * 65536)        # samples a frame as FREQ
 
     # the globals as they come up, then a sample RAM full of noise (every bit pattern)
-    for a in range(0x200, 0x212):
+    for a in range(0x200, 0x218):
         s.r(a)
     for a in range(size):
         s.w(a, rnd.randrange(256), ram=1)
@@ -444,10 +458,26 @@ def build(ram_bits, seed):
         s.w(G_MASTER, master)
         s.frames(30)
     s.w(G_CONTROL, 0)
+    s.count()                           # the frame counter stands still with the engine
     s.frames(20)
     s.status(5)
+    s.count()
     s.w(G_CONTROL, 1)
     s.frames(50)
+    s.count()
+
+    # the frame counter: its upper bytes are held from the read of the lowest; a write
+    # starts it from 0
+    s.r(G_FRAMES)
+    s.frames(300)
+    for a in (G_FRAMES + 1, G_FRAMES + 2, G_FRAMES + 3):
+        s.r(a)
+    s.count()
+    s.w(G_FRAMES, 0xA5)
+    s.count()
+    for n in (1, 2, 255, 1, 300):
+        s.frames(n)
+        s.count()
 
     # backward once through, in 8 bits; a voice whose END is below its START; 16 bits on
     # odd addresses

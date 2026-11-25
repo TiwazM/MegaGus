@@ -4386,7 +4386,7 @@ static u8 channel_ins(u8 ch)
 
 #define VOL_AT 54
 #define VOL_WIDE 12
-#define VOL_OWN 8
+#define VOL_OWN 6
 
 static void show_tabs(void)
 {
@@ -4398,7 +4398,8 @@ static void show_tabs(void)
   l_text("F1 Channels   F3 Samples   F5 Pattern   F7 Help");
   /* the volume against the song's own (the engine's MASTER as the song began with it): a
      bar in half columns, of which VOL_OWN columns are the song's own and green, and the
-     rest, to half as much again, yellow: there it may be too much. And in percent. */
+     rest, to twice as much, where the keys stop, yellow: there it may be too much. And in
+     percent. */
   lx = 50;
   l_text("Vol ");
   w = ((u16)master * (2 * VOL_OWN) + (master_own >> 1)) / master_own;
@@ -4857,12 +4858,22 @@ static void play_song(void)
       skip_to((u8)(order ? order - 1 : 0));
       break;
     case 0x2C: /* , */
-      master = (u8)(master > 2 ? master - 2 : 1);
+      /* two at a time, but not past the song's own without stopping on it */
+      if (master > master_own && master - 2 < master_own)
+        master = master_own;
+      else
+        master = (u8)(master > 2 ? master - 2 : 1);
       wr(G_MASTER, master);
       show_tabs();
       break;
     case 0x2E: /* . */
-      master = (u8)(master < 126 ? master + 2 : 127);
+      /* no louder than twice the song's own: beyond that it only distorts */
+      if (master < master_own && master + 2 > master_own)
+        master = master_own;
+      else
+        master = (u8)(master + 2);
+      if (master > (master_own < 64 ? 2 * master_own : 127))
+        master = (u8)(master_own < 64 ? 2 * master_own : 127);
       wr(G_MASTER, master);
       show_tabs();
       break;

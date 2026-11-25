@@ -337,8 +337,11 @@ the screens are the song's name and kind, and its position, pattern, row, speed,
 the time played, and next to the names of the screens the volume: a bar and a number in
 percent of the level the song began with (the engine's MASTER, which the player sets by
 the number of channels so that the song does not clip). The bar is green up to that level
-and yellow beyond it, to half as much again: there the loudest places may distort. The
-volume is the song's own again with the next song.
+and yellow beyond it, to twice as much: there the loudest places may distort, and there
+the keys stop (at first they went on to all the engine has, six times the level of a
+MOD of 6 channels, which is only noise). The keys move MASTER by two and stop on the
+song's own level when they cross it, so 100 % can always be had again. The volume is the
+song's own again with the next song.
 
 **What it plays.** MODs with 31 samples and 4 channels (`M.K.`, `M!K!`, `FLT4`, `4CHN`) or
 more (`6CHN`, `8CHN`, `OCTA`, `CD81`, `xxCH`, up to 32); S3Ms with up to 32 channels and up
@@ -714,6 +717,9 @@ program reads it (an `R` typed there was still there), so the `RUN` and its RETU
 list's first keys: it now empties that before it looks. The second build was loaded, left,
 `RUN` again and played `kill.xm` as before (0.983). A third has the volume bar: on the
 machine it went from 100 % to 129 % (into the yellow), down to 62 % and back with the keys.
+A fourth stops at 200 %, on the machine too; from there ROYAL.MOD, whose own level is 21,
+came down to 105 % and 95 % and not to 100, which the stop on the song's own level is for:
+with that, the fifth build came down from 200 % to 105 % and then 100 %.
 
 `big.s3m`, the megabyte of samples: the screen says "2 smaller", and the four notes are at
 440.2, 440.2, 130.7 and 440.2 Hz in the recording, as in the model and in libopenmpt. It

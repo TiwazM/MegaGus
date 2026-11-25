@@ -84,7 +84,7 @@ What it keeps is the idea; what it changes:
   the SD card's modules with its folders, and while a module plays its channels with a bar
   for each one's level, its samples, and its pattern (2026-11-25). With XM the program is
   more than C64-mode memory holds at once, and is now five files: `modplay.prg` and four
-  overlays that it reads from the SD card. On this computer: the self-test passes with XM
+  overlays that it reads when it starts, all five on one disk image (`MODPLAY.D81`). On this computer: the self-test passes with XM
   in it, and over the first 40 seconds of four real XMs with 8 to 20 channels every one of
   1 933 rows is the same row and as long as in libopenmpt, and 56 889 of
   56 991 ticks agree in pitch and level (see [there](#module-player)); MOD and S3M
@@ -299,12 +299,17 @@ test on the attic RAM instead.
 `src/utilities/megagus/modplay.prg` plays ProTracker-style modules, Scream Tracker 3
 modules (S3M) and FastTracker 2 modules (XM) from the SD card:
 
-    make USE_LOCAL_CC65=1 src/utilities/megagus/modplay.prg
+    make USE_LOCAL_CC65=1 src/utilities/megagus/MODPLAY.D81
 
-That makes five files, which all go into the same directory of the SD card: `modplay.prg`
-and `MODPLAY.OV1` to `MODPLAY.OV4`. It is a C64-mode program, loaded and run like the test
-program. It reads the four overlays when it starts, and says so if one is missing or is
-another build's.
+That makes the program (`modplay.prg`), its four overlays (`MODPLAY.OV1` to `MODPLAY.OV4`)
+and a disk image with the five on it (51 KB, 207 of its 3160 blocks). Put `MODPLAY.D81` on
+the SD card, mount it, and in C64 mode `LOAD"*",8` and `RUN`. Or put the five files
+themselves into one directory of the SD card and load the program as the test program is
+loaded. When it starts it looks for its overlays on the disk in the drive it came from,
+then in the SD card's directory, and says so if one is missing or is another build's.
+
+The modules are not read from a disk image (some are bigger than one): they are files on
+the SD card itself.
 
 It shows the modules (`*.mod`, `mod.*`, `*.s3m`, `*.xm`) and the folders of the SD card's
 current directory, up to 250 of them, in 80 columns: cursor up and down choose (left and
@@ -343,10 +348,12 @@ into rows it has not seen it reads its way there.
 **In parts.** With XM the program came to some 60 KB, and a C64-mode program has 50. So it
 is a main part and four overlays, which take turns in two places in memory
 (`modplay.cfg` is the plan of it): the file list or the playing screens in one, the player
-of a MOD and an S3M or that of an XM in the other. All four are read from the SD card once,
-when the program starts, and kept in the MEGA65's bank 5: putting one in place is then a
-copy of a few kilobytes, and a change of folder does not lose them. Each begins with the
-number of its build, and the program does not take another build's.
+of a MOD and an S3M or that of an XM in the other. All four are read once, when the program
+starts (with the KERNAL from the disk it was loaded from, or else with the Hypervisor from
+the SD card's directory), and kept in the MEGA65's bank 5: putting one in place is then a
+copy of a few kilobytes, and a change of folder does not lose them. Each is a program file
+with the number of its build after its load address, and the program does not take another
+build's.
 
 The screen is the VIC-IV's 80 columns with its memory in bank 4, written a row at a time
 with the DMA. While a module plays, one row of a screen is drawn between two looks at the
@@ -525,7 +532,8 @@ with `-DKEYS=...` it presses those keys by itself and then tells Xemu to stop, w
 picture of the screen (Xemu's `-headless -testing -screenshot`, and `-hdosvirt` to give it
 a folder of this computer as the SD card). The file list, a folder, and the playing screens
 for a MOD, an S3M and an XM were looked at that way, and an 862 KB XM whose samples had to
-be made smaller. The overlays are read and put in place there as on the machine. Xemu also
+be made smaller. The overlays are read and put in place there as on the machine, from the
+SD card's directory and from a disk image (`maked81.py`'s, started with `LOAD"*",8`). Xemu also
 has the MEGA65's multiplier (`$D770`), which the player uses for an XM's levels after
 trying it once: it gave the right product.
 
@@ -704,6 +712,7 @@ hurry through the ticks it missed.
 | `src/tests/megagus/megagustest_host.py` | The same program on this computer, with the model |
 | `src/utilities/megagus/modplay.c`       | The module player (MOD, S3M and XM)               |
 | `src/utilities/megagus/modplay.cfg`     | Its plan of memory: the program and its overlays  |
+| `src/utilities/megagus/maked81.py`      | The program and its overlays on one disk image    |
 | `src/utilities/megagus/modplay_host.py` | The player on this computer, and its self-test    |
 | `src/utilities/megagus/makemod.py`      | The test MODs and a tune of its own               |
 | `src/utilities/megagus/makes3m.py`      | The test S3Ms, one too big for the sample RAM     |

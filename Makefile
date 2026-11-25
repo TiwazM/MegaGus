@@ -898,6 +898,10 @@ $(UTILDIR)/megagus/modplay.prg:       $(UTILDIR)/megagus/modplay.c $(UTILDIR)/me
 	$(CL65NC) -t c64 -O -C $(UTILDIR)/megagus/modplay.cfg -DSTAMP=$(shell expr `date +%s` % 32000 + 1) -o $*.prg --mapfile $*.map $< $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s
 	for n in 1 2 3 4; do mv $*.prg.$$n $(UTILDIR)/megagus/MODPLAY.OV$$n; done
 
+# and the five on one disk image, the program first: mount it, LOAD"*",8 in C64 mode
+$(UTILDIR)/megagus/MODPLAY.D81:	$(UTILDIR)/megagus/modplay.prg $(UTILDIR)/megagus/maked81.py
+	python3 $(UTILDIR)/megagus/maked81.py $@ $(UTILDIR)/megagus
+
 $(UTILDIR)/mega65_config.prg:       $(UTILDIR)/mega65_config.o $(CC65_DEPEND)
 	$(call mbuild_header,$@)
 	$(LD65) $< -Ln $*.label -vm --mapfile $*.map -o $*.prg

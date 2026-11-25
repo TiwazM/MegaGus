@@ -15,8 +15,9 @@
   byte an output frame), and a module can have 31 channels, not 32.
 
   Built with cc65 for the MEGA65 it is a C64-mode program in parts, since all of it is more
-  than fits at once (modplay.cfg): a main part and four overlays, which it reads from the SD
-  card (MODPLAY.OV1 to MODPLAY.OV4) and puts in place as it needs them. They are the list of
+  than fits at once (modplay.cfg): a main part and four overlays (MODPLAY.OV1 to MODPLAY.OV4),
+  which it reads when it starts, from the disk it was loaded from (maked81.py puts the five
+  on a D81) or from the SD card's directory, and puts in place as it needs them. They are the list of
   the SD card's modules, the screens while one plays, the player of a MOD and an S3M, and the
   player of an XM. Built with a host compiler, or with cc65 for its simulator (-t sim6502),
   it is one program that plays the file named on its command line once through, speaking
@@ -53,17 +54,23 @@ typedef unsigned long u32; /* at least 32 */
 #ifndef STAMP
 #define STAMP 1 /* the build: the overlays of another are not taken */
 #endif
-/* each overlay's first two bytes (modplay.cfg puts these segments first) */
+/* Each overlay's first four bytes (modplay.cfg puts these segments first): the address the
+   rest of the file loads to, as a program file on a disk begins, and the build's number */
+extern u8 _OVL1_START__[], _OVL2_START__[], _OVL3_START__[], _OVL4_START__[];
 #pragma rodata-name (push, "OVL1HEAD")
+const u8 *const ov1_addr = _OVL1_START__ + 2;
 const u16 ov1_stamp = STAMP;
 #pragma rodata-name (pop)
 #pragma rodata-name (push, "OVL2HEAD")
+const u8 *const ov2_addr = _OVL2_START__ + 2;
 const u16 ov2_stamp = STAMP;
 #pragma rodata-name (pop)
 #pragma rodata-name (push, "OVL3HEAD")
+const u8 *const ov3_addr = _OVL3_START__ + 2;
 const u16 ov3_stamp = STAMP;
 #pragma rodata-name (pop)
 #pragma rodata-name (push, "OVL4HEAD")
+const u8 *const ov4_addr = _OVL4_START__ + 2;
 const u16 ov4_stamp = STAMP;
 #pragma rodata-name (pop)
 #endif
@@ -120,6 +127,9 @@ struct m65_dirent {
   unsigned short d_type;  /* its FAT attributes */
   char d_name[256];
 };
+/* cc65's: the KERNAL's LOAD, to an address; returns the bytes it loaded */
+unsigned int __fastcall__ cbm_load(const char *name, unsigned char device, void *data);
+
 void closeall(void);
 unsigned char chdir(char *filename);
 unsigned char open(char *filename);
@@ -3960,10 +3970,7 @@ static void message(const char *s)
 #define OV_XM 4
 
 /* where the linker has each, and how far it goes */
-extern u8 _OVL1_START__[], _OVL1_LAST__[];
-extern u8 _OVL2_START__[], _OVL2_LAST__[];
-extern u8 _OVL3_START__[], _OVL3_LAST__[];
-extern u8 _OVL4_START__[], _OVL4_LAST__[];
+extern u8 _OVL1_LAST__[], _OVL2_LAST__[], _OVL3_LAST__[], _OVL4_LAST__[];
 
 static u8 ov_in[2]; /* which is in each place */
 static char ov_name[12] = { 0x4D, 0x4F, 0x44, 0x50, 0x4C, 0x41, 0x59, 0x2E, 0x4F, 0x56, 0x31, 0 }; /* MODPLAY.OV1 */
@@ -3996,33 +4003,54 @@ static u16 ov_size(u8 n)
   }
 }
 
-/* All four from the SD card into bank 5, 16 KB apart. 0, or the one that is not there or is
-   another build's: each begins with the build's number. */
+/* All four into bank 5, 16 KB apart: from the disk in the drive the program came from (a
+   D81 with the five files on it), or, when the first is not there, from the SD card's
+   directory. 0, or the one that is not there or is another build's: each begins with the
+   address it loads to and then the build's number. */
 static u8 fetch_overlays(void)
 {
-  u8 n;
+  u8 n, dev, disk = 1;
   unsigned char fd;
   u16 left, k;
   u32 to;
 
+  dev = PEEK(0x00BAU);
+  if (dev < 8)
+    dev = 8;
   for (n = 1; n <= 4; n++) {
     ov_name[10] = (char)(0x30 + n);
-    closeall();
-    fd = open(ov_name);
-    if (fd == 0xFF)
-      return n;
     to = STORE + ((u32)(n - 1) << 14);
-    for (left = ov_size(n); left; left -= k) {
-      read512(sector);
-      k = (u16)(left > 512 ? 512 : left);
-      mg_put(to, sector, k);
-      to += k;
+    if (disk) {
+      /* the KERNAL loads it to where it runs, less the two bytes of its address */
+      k = cbm_load(ov_name, dev, ov_at(n) + 2);
+      POKE(0xD02FU, 0x47); /* the MEGA65's registers again, in case the drive's code hid them */
+      POKE(0xD02FU, 0x53);
+      if (k == ov_size(n) - 2)
+        mg_put(to, ov_at(n), ov_size(n));
+      else if (k == 0 && n == 1)
+        disk = 0;
+      else
+        return n;
     }
-    close(fd);
-    mg_get(sector, STORE + ((u32)(n - 1) << 14), 2);
+    if (!disk) {
+      closeall();
+      fd = open(ov_name);
+      if (fd == 0xFF)
+        return n;
+      for (left = ov_size(n); left; left -= k) {
+        read512(sector);
+        k = (u16)(left > 512 ? 512 : left);
+        mg_put(to, sector, k);
+        to += k;
+      }
+      close(fd);
+      to = STORE + ((u32)(n - 1) << 14);
+    }
+    mg_get(sector, to + 2, 2);
     if (sector[0] != (u8)(STAMP & 0xFF) || sector[1] != (u8)(STAMP >> 8))
       return n;
   }
+  ov_in[0] = ov_in[1] = 0;
   return 0;
 }
 
@@ -4859,8 +4887,12 @@ int main(void)
 {
   u8 n;
 
+  u8 missing;
+
   POKE(0xD02FU, 0x47); /* MEGA65 registers on */
   POKE(0xD02FU, 0x53);
+  /* the overlays first, while the machine is as the KERNAL and the drive know it */
+  missing = fetch_overlays();
   POKE(0x0000U, 65); /* 40 MHz */
   screen_on();
   title("");
@@ -4873,12 +4905,10 @@ int main(void)
     mg_poke(ATTIC + 1, 0xA5);
     if (mg_peek(ATTIC) != 0x5A || mg_peek(ATTIC + 1) != 0xA5)
       message("This machine has no attic RAM.");
-    else {
-      n = fetch_overlays();
-      if (n)
-        message("MODPLAY.OV1 to MODPLAY.OV4 belong next to the program, from the same build.");
-      n = (u8)!n;
-    }
+    else if (missing)
+      message("MODPLAY.OV1 to MODPLAY.OV4 belong next to the program, from the same build.");
+    else
+      n = 1;
   }
   if (!n) {
     keys_row("A key: leave");

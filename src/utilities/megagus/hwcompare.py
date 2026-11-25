@@ -6,7 +6,9 @@ plays for the same module (modplay_host.py): is it the same music?
   ./hwcompare.py RECORDING.wav MODEL.wav [--seconds S]
 
 The recording may begin before the song does, and it carries a constant offset: the song's
-start is its first sound once that offset is taken off. From there the two are compared a
+start is its first sound once that offset is taken off, moved by up to a second to where the
+loudness of the two rises and falls together (a song that fades in has no first sound that
+could be told from the capture card's noise). From there the two are compared a
 second at a time by what is in them, not sample by sample: the player on the machine looks at
 its clock a little earlier or later than the one on the model, so a note can begin a fraction
 of a millisecond apart, which leaves the music the same and the waveforms not. Per second:
@@ -56,6 +58,29 @@ def first_sound(x, level):
     return int(loud[0]) if len(loud) else 0
 
 
+def loudness(x, hop):
+    m = x.sum(axis=1)
+    n = len(m) // hop
+    return np.sqrt((m[:n * hop].reshape(n, hop) ** 2).mean(axis=1))
+
+
+def settle(rec, mod, rate, lead, seconds=20):
+    """A song that fades in has no first sound to go by. rec begins `lead` samples before
+    where the song was taken to begin: how many samples later (or earlier) it does begin, by
+    how the loudness of the two rises and falls over the first seconds, to 2 ms."""
+    hop = rate // 500
+    er, em = loudness(rec, hop), loudness(mod[:seconds * rate], hop)
+    em = em - em.mean()
+    best, at = -2.0, lead // hop
+    for l in range(0, min(2 * (lead // hop), len(er) - len(em)) + 1):
+        a = er[l:l + len(em)]
+        a = a - a.mean()
+        c = float(np.dot(a, em) / (np.linalg.norm(a) * np.linalg.norm(em) + 1e-12))
+        if c > best:
+            best, at = c, l
+    return at * hop - (lead // hop) * hop
+
+
 def spectra(x):
     """Magnitude spectra of x (mono) in windows of WIN every HOP"""
     w = np.hanning(WIN)
@@ -79,6 +104,7 @@ def main():
     mod = without_offset(mod, rr)
     begin = first_sound(rec, 0.02 * np.abs(rec).max())
     mod = mod[first_sound(mod, 0.02 * np.abs(mod).max()):]
+    begin = max(0, begin + settle(rec[max(0, begin - rr):], mod, rr, min(begin, rr)))
     rec = rec[begin:]
     n = int(min(len(rec), len(mod), a.seconds * rr))
     rec, mod = rec[:n], mod[:n]

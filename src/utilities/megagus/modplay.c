@@ -3800,6 +3800,10 @@ static u8 key(void)
     return 0;
   script_wait = 0;
   k = script[script_at];
+#ifdef RERUN
+  if (k == 0x1B && PEEK(0x02A7U) == 0x55) /* the second time round: the end is here */
+    k = 0;
+#endif
   if (k == 0)
     POKE(0xD6CFU, 0x42);
   else
@@ -4923,6 +4927,8 @@ int main(void)
     hw_mul = 0;
   need(OV_FILES);
   find_files();
+  while (PEEK(0xD610U)) /* what was typed to load and run this is not meant for the list */
+    POKE(0xD610U, 0);
   for (;;) {
     need(OV_FILES);
     if (!browse())
@@ -4932,6 +4938,17 @@ int main(void)
   }
   wr(G_CONTROL, 0x80);
   screen_off();
+  while (PEEK(0x0091U) == 0x7F) /* RUN/STOP still down would be BASIC's BREAK */
+    ;
+#if defined(NOGUS) && defined(KEYS) && defined(RERUN)
+  /* for an emulator: RUN typed for BASIC, once, to see the program start a second time */
+  POKE(0x02A7U, 0x55);
+  POKE(0x0277U, 0x52);
+  POKE(0x0278U, 0x55);
+  POKE(0x0279U, 0x4E);
+  POKE(0x027AU, 0x0D);
+  POKE(0x00C6U, 4);
+#endif
   return 0;
 }
 

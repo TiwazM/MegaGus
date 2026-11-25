@@ -89,8 +89,14 @@ What it keeps is the idea; what it changes:
   1 933 rows is the same row and as long as in libopenmpt, and 56 889 of
   56 991 ticks agree in pitch and level (see [there](#module-player)); MOD and S3M
   compare as they did before. The screens were tried in the Xemu emulator with the engine
-  left out. **Not run on a MEGA65 yet**: no XM has been heard, and how long a tick of
-  twenty XM channels takes the real CPU is not known.
+  left out.
+- That player on the R6 (2026-11-25, loaded from `MODPLAY.D81`): a MOD, an S3M and the four
+  XMs were played and recorded over HDMI, and every second of each recording has the
+  spectrum and the level of what the model plays, the 20 channels of `alien.xm` and the 18
+  of `clown.xm` among them, each with five or six samples made smaller on the machine. The
+  list, the folders, the four screens, pause, the position keys, leaving and a second `RUN`
+  work there. Heard by a capture card. How long a tick takes the real CPU was not measured:
+  the songs keep their time over 44 seconds.
 - No emulator support yet.
 
 ## Where it is
@@ -307,6 +313,7 @@ the SD card, mount it, and in C64 mode `LOAD"*",8` and `RUN`. Or put the five fi
 themselves into one directory of the SD card and load the program as the test program is
 loaded. When it starts it looks for its overlays on the disk in the drive it came from,
 then in the SD card's directory, and says so if one is missing or is another build's.
+After ESC in the list, `RUN` starts it again.
 
 The modules are not read from a disk image (some are bigger than one): they are files on
 the SD card itself.
@@ -354,6 +361,11 @@ the SD card's directory), and kept in the MEGA65's bank 5: putting one in place 
 copy of a few kilobytes, and a change of folder does not lose them. Each is a program file
 with the number of its build after its load address, and the program does not take another
 build's.
+
+cc65's own plan for a C64 program puts the variables where its start-up code is, so the
+code is gone once the program runs and a second `RUN` ends in BASIC's `READY.` on a cleared
+screen (the processor meets a zero, a BRK). `modplay.cfg` puts the variables after those 38
+bytes instead. The three variables that begin with a value keep the one they had.
 
 The screen is the VIC-IV's 80 columns with its memory in bank 4, written a row at a time
 with the DMA. While a module plays, one row of a screen is drawn between two looks at the
@@ -535,7 +547,9 @@ for a MOD, an S3M and an XM were looked at that way, and an 862 KB XM whose samp
 be made smaller. The overlays are read and put in place there as on the machine, from the
 SD card's directory and from a disk image (`maked81.py`'s, started with `LOAD"*",8`). Xemu also
 has the MEGA65's multiplier (`$D770`), which the player uses for an XM's levels after
-trying it once: it gave the right product.
+trying it once: it gave the right product. With `-DRERUN` as well, the program types `RUN`
+for BASIC when it is left, once: that it starts a second time is seen there too, and with
+cc65's own plan of memory it does not.
 
 A tick was timed there as well (`-DTICKTIME`: by the CIA's timer, with the raster agreeing):
 3.5 ms on average and 7 ms at most for an XM of 20 channels, 1.2 and 2.6 ms for one of 16,
@@ -662,12 +676,39 @@ MEGA65 Studio's own check of it found).
 
 | Module        | What it shows                          | Spectrum, median (lowest) | Level  |
 |---------------|----------------------------------------|---------------------------|--------|
-| SUN.S3M       | an S3M, mono                           | 0.969 (0.952)             | 0.8 dB |
+| SUN.S3M       | an S3M, mono                           | 0.980 (0.965)             | 0.6 dB |
 | ZEN.S3M       | 16 channels, 549 KB, stereo            | 0.944 (0.913)             | 0.9 dB |
 | DELERIUM.S3M  | saved by Impulse Tracker               | 0.974 (0.964)             | 0.2 dB |
-| ROYAL.MOD     | a MOD, 6 channels, tempo 170           | 0.998 (0.971)             | 1.0 dB |
-| FINKEL.MOD    | a MOD, 4 channels                      | 0.943 (0.844)             | 0.8 dB |
-| DEMO.MOD      | a ProTracker MOD                       | 0.959 (0.937)             | 0.2 dB |
+| ROYAL.MOD     | a MOD, 6 channels, tempo 170           | 0.998 (0.977)             | 0.9 dB |
+| FINKEL.MOD    | a MOD, 4 channels                      | 0.946 (0.844)             | 0.8 dB |
+| DEMO.MOD      | a ProTracker MOD                       | 0.957 (0.939)             | 0.2 dB |
+
+The player with XM and the screens, loaded from `MODPLAY.D81` in the same core later that
+day; the first 30 seconds of each:
+
+| Module        | What it shows                               | Spectrum, median (lowest) | Level  |
+|---------------|---------------------------------------------|---------------------------|--------|
+| ROYAL.MOD     | as above                                    | 0.998 (0.982)             | 0.9 dB |
+| SUN.S3M       | as above                                    | 0.978 (0.949)             | 0.6 dB |
+| PAGER11.XM    | 8 channels, fades in                        | 0.968 (0.886)             | 0.7 dB |
+| kill.xm       | 16 channels, 295 KB                         | 0.987 (0.806)             | 1.0 dB |
+| alien.xm      | 20 channels, 863 KB, 5 samples made smaller | 0.972 (0.937)             | 1.5 dB |
+| clown.xm      | 18 channels, 1 066 KB, 6 made smaller       | 0.968 (0.951)             | 0.6 dB |
+
+Over 44 seconds the four XMs stay as alike (medians 0.953 to 0.987), so the player does not
+fall behind the song. They load in about 1, 4, 12 and 15 seconds. `kill.xm`'s lowest second
+is its first, both times it was played. `PAGER11.XM` begins with noise that swells, and a
+first sound taken from that put the two a quarter of a second apart (0.921); since then
+`hwcompare.py` moves the start to where the loudness of the two rises and falls together,
+and the numbers of the first table are measured that way too.
+
+What else was tried on the machine: the list with its 26 entries, which scrolls; the four
+screens; pause and on; `+`; leaving a song and the program with RUN/STOP. The first build
+could not be `RUN` a second time (above, "In parts"), and left to BASIC's `BREAK` when
+RUN/STOP was still down. And the MEGA65 keeps what is typed at BASIC at `$D610` until a
+program reads it (an `R` typed there was still there), so the `RUN` and its RETURN were the
+list's first keys: it now empties that before it looks. The second build was loaded, left,
+`RUN` again and played `kill.xm` as before (0.983).
 
 `big.s3m`, the megabyte of samples: the screen says "2 smaller", and the four notes are at
 440.2, 440.2, 130.7 and 440.2 Hz in the recording, as in the model and in libopenmpt. It

@@ -80,6 +80,17 @@ What it keeps is the idea; what it changes:
   (`hwcompare.py`): 16 channels and 549 KB among them, one saved by Impulse Tracker, and a
   module with a megabyte of samples of which two were made smaller on the machine and still
   sound at 440.2 Hz. Heard by nobody yet: by a capture card.
+- The module player plays XM (FastTracker 2) too, and has screens of its own in 80 columns:
+  the SD card's modules with its folders, and while a module plays its channels with a bar
+  for each one's level, its samples, and its pattern (2026-11-25). With XM the program is
+  more than C64-mode memory holds at once, and is now five files: `modplay.prg` and four
+  overlays that it reads from the SD card. On this computer: the self-test passes with XM
+  in it, and over the first 40 seconds of four real XMs with 8 to 20 channels every one of
+  1 933 rows is the same row and as long as in libopenmpt, and 56 889 of
+  56 991 ticks agree in pitch and level (see [there](#module-player)); MOD and S3M
+  compare as they did before. The screens were tried in the Xemu emulator with the engine
+  left out. **Not run on a MEGA65 yet**: no XM has been heard, and how long a tick of
+  twenty XM channels takes the real CPU is not known.
 - No emulator support yet.
 
 ## Where it is
@@ -285,22 +296,39 @@ test on the attic RAM instead.
 
 ## Module player
 
-`src/utilities/megagus/modplay.prg` plays ProTracker-style modules and Scream Tracker 3
-modules (S3M) from the SD card:
+`src/utilities/megagus/modplay.prg` plays ProTracker-style modules, Scream Tracker 3
+modules (S3M) and FastTracker 2 modules (XM) from the SD card:
 
     make USE_LOCAL_CC65=1 src/utilities/megagus/modplay.prg
 
-It is a C64-mode program, loaded and run like the test program. It lists the files named
-`*.mod`, `mod.*` or `*.s3m` in the SD card's current directory (the first 44): cursor up and
-down, RETURN plays, `Q` leaves. While a module plays, SPACE pauses, `+` and `-` skip to the
-next and the previous position, `V` changes a MOD's timing (below), `Q` stops it. The screen
-shows the module's title, its sample names (often its text: the first 17 whole) and where
-the song is.
+That makes five files, which all go into the same directory of the SD card: `modplay.prg`
+and `MODPLAY.OV1` to `MODPLAY.OV4`. It is a C64-mode program, loaded and run like the test
+program. It reads the four overlays when it starts, and says so if one is missing or is
+another build's.
+
+It shows the modules (`*.mod`, `mod.*`, `*.s3m`, `*.xm`) and the folders of the SD card's
+current directory, up to 250 of them, in 80 columns: cursor up and down choose (left and
+right go a page), RETURN plays a module or opens a folder, ESC leaves. While a module plays
+there are four screens, on F1, F3, F5 and F7:
+
+- the channels: each one's note and instrument, a bar for how loud it is, and where it is
+  between left and right;
+- the samples (an XM's instruments): name, size, 8 or 16 bits, loop, whether it was made
+  smaller to fit, and a mark at those that are sounding. The names are often the module's
+  text;
+- the pattern as it plays, five channels of it (cursor left and right for the others);
+- the keys.
+
+SPACE pauses, `+` and `-` go to the next and the previous position, `,` and `.` make it
+quieter and louder, `V` changes a MOD's timing (below), ESC goes back to the list. Above
+the screens are the song's name and kind, and its position, pattern, row, speed, tempo and
+the time played.
 
 **What it plays.** MODs with 31 samples and 4 channels (`M.K.`, `M!K!`, `FLT4`, `4CHN`) or
-more (`6CHN`, `8CHN`, `OCTA`, `CD81`, `xxCH`, up to 32), and S3Ms with up to 32 channels
-and up to 99 samples. The file can be as big as the attic RAM (8 MB).
-Not XM or IT, not the old 15-sample modules, and of an S3M not the AdLib instruments.
+more (`6CHN`, `8CHN`, `OCTA`, `CD81`, `xxCH`, up to 32); S3Ms with up to 32 channels and up
+to 99 samples; XMs (version 1.04) with up to 32 channels, 128 instruments and 99 samples in
+all. The file can be nearly as big as the attic RAM (8 MB).
+Not IT, not the old 15-sample modules, and of an S3M not the AdLib instruments.
 
 **How.** The whole file is copied into the MEGA65's attic RAM (`$8000000`) as it is, and the
 samples from there into the sample RAM, one after the other. Each row of a pattern is read
@@ -311,6 +339,19 @@ pitch changes are written as they happen. A sample's loop is the voice's START a
 POS at the sample's beginning. An S3M's rows are packed, each as long as what is in it: the
 player notes where each row of the playing pattern began as it comes to it, and for a jump
 into rows it has not seen it reads its way there.
+
+**In parts.** With XM the program came to some 60 KB, and a C64-mode program has 50. So it
+is a main part and four overlays, which take turns in two places in memory
+(`modplay.cfg` is the plan of it): the file list or the playing screens in one, the player
+of a MOD and an S3M or that of an XM in the other. All four are read from the SD card once,
+when the program starts, and kept in the MEGA65's bank 5: putting one in place is then a
+copy of a few kilobytes, and a change of folder does not lose them. Each begins with the
+number of its build, and the program does not take another build's.
+
+The screen is the VIC-IV's 80 columns with its memory in bank 4, written a row at a time
+with the DMA. While a module plays, one row of a screen is drawn between two looks at the
+clock, so that no tick waits for the screen. The keys come from the MEGA65's keyboard
+register (`$D610`).
 
 **More samples than sample RAM.** When a module's samples are more than the 512 KB, the
 biggest are made smaller as they are copied, until all fit: a 16-bit sample is kept as
@@ -370,6 +411,59 @@ How an S3M is played depends on what made it, and the player follows libopenmpt 
   on a row's first tick where they stand, the tremolo is half as deep as a MOD's, and the
   ramp waveform goes the other way.
 
+**An XM.** Instruments with up to 16 samples each (the note says which one plays), their
+volume and panning envelopes with sustain point and loop, the fade after the key goes up,
+and the instrument's own vibrato (sine, square, the two ramps, growing in if it has a
+sweep); 8-bit and 16-bit samples, looped forward or back and forth, each with its own
+volume, place between the sides, finetune and transposition; linear periods and an Amiga's;
+patterns of 1 to 256 rows. An instrument's settings and envelopes stay where they are, in
+the file in the attic RAM. The player keeps a table of where each instrument and pattern
+is (behind the file, in the attic RAM too), and for a channel only the stretch of the
+envelope it is on: its value and what a tick adds. When the envelope comes to its next
+point, that is fetched anew.
+
+Its commands: 0 arpeggio, 1 and 2 slides, 3 tone portamento, 4 vibrato, 5, 6, 7 tremolo,
+8 pan, 9 sample offset, A volume slide, B position jump, C volume, D pattern break, F speed
+and tempo, G the song's volume and H its slide, K key off, L envelope position, P pan slide,
+R retrigger with its volume change, T tremor, X1 and X2 extra fine slides; E1, E2, E4 to
+E7, E9 and EA to EE as in a MOD; in the volume column a volume, volume slides and fine
+slides, vibrato speed and vibrato, pan and pan slides, tone portamento. Not done: E3
+(glissando).
+
+An XM is played as FastTracker 2 plays it, mistakes included, since modules were made by
+ear with those. The player takes that from libopenmpt, measured with modules made for the
+purpose:
+
+- finetune moves in sixteenths of a semitone;
+- a side gets the square root of its share, where the engine's PAN is the share itself:
+  the player moves PAN towards the middle and raises the level until both sides get what
+  FastTracker gives them;
+- which step of an arpeggio sounds depends on the speed, because FastTracker counts a
+  row's ticks down;
+- where an envelope's loop ends on its sustain point, the loop goes round while the key is
+  down;
+- the instrument's vibrato, while it is still growing in, all but stops when the key goes
+  up;
+- L moves the panning envelope only if the volume envelope has a sustain point;
+- a ramp tremolo turns over where the vibrato is in its second half;
+- R counts its ticks across rows and past notes, begins at one on a row with an instrument
+  number, and passes over a row's first tick when the volume column sets a volume;
+- ED with no note plays the channel's note again, and its row does nothing on its first
+  tick;
+- after a pattern loop (E6) the next pattern begins at the row the loop went back to,
+  unless a break names another;
+- a sample offset past the end plays nothing, loop or not.
+
+In two things libopenmpt may not be FastTracker, and the player is as libopenmpt: a slide to
+a note on a voice that has stopped (its sample played out) starts the sample again, and a
+vibrato or a tremolo sounds on a row's first tick where it stands. One thing is not copied:
+FastTracker, and libopenmpt after it, glide to a new volume over a whole tick, and the
+engine is there in a millisecond.
+
+An XM's voice in the middle is at 0.71 of full level on each side, so the master volume is
+`181 / channels` up to four channels, where nothing can clip, and 34 for more: at that the
+loudest of the four real XMs tried here peaks at 0.93 of full scale.
+
 **A MOD's timing.** An F command below 32 is a speed (ticks a row), from 32 up a tempo (beats a
 minute): ProTracker's CIA timing. Modules from before that mean a speed by every F, and
 some say so in their sample names ("play with vblank"). `V` switches to that VBlank timing
@@ -411,10 +505,36 @@ fifth is the same with signed samples, and the two builds must sound exactly ali
 a MOD and an S3M are played with the clock an engine of version 1 has, a silent voice
 (`-k`), and must come out as the same song.
 
+For XM it makes `test.xm` (`makexm.py`, on `xmfile.py`, which reads and writes XMs): 13
+instruments (envelopes with sustain points and loops, fades, each kind of own vibrato, two
+samples in one instrument, a 16-bit sample looped back and forth) and every command in
+turn on four channels, in patterns of 64, 37, 16 and 8 rows with a loop, a break and a jump;
+and `test_amiga.xm`, the same song with an Amiga's periods. Both builds must write the same
+for each. `big.xm` has 700 KB of samples, one of them 16-bit, stored as an XM stores them
+(each value as its difference from the one before): the builds must sound exactly alike on
+it, two samples must have been made smaller, and its notes be at 440.2, 440.2 and 130.7 Hz.
+
 What that does not test: the parts only a MEGA65 has (the file list, loading from the SD
-card, the screen and the keys), and whether the commands are understood as ProTracker
-understands them where the test modules and the player share a misreading. For that there
-is the next.
+card, the screens and the keys, the overlays), and whether the commands are understood as
+their trackers understand them where the test modules and the player share a misreading.
+For the first there is an emulator, for the second another player.
+
+**The screens in an emulator.** Xemu has no MegaGus, so the program can be built without
+one: with `-DNOGUS` it takes the engine as there and lets its clock go on by itself, and
+with `-DKEYS=...` it presses those keys by itself and then tells Xemu to stop, which saves a
+picture of the screen (Xemu's `-headless -testing -screenshot`, and `-hdosvirt` to give it
+a folder of this computer as the SD card). The file list, a folder, and the playing screens
+for a MOD, an S3M and an XM were looked at that way, and an 862 KB XM whose samples had to
+be made smaller. The overlays are read and put in place there as on the machine. Xemu also
+has the MEGA65's multiplier (`$D770`), which the player uses for an XM's levels after
+trying it once: it gave the right product.
+
+A tick was timed there as well (`-DTICKTIME`: by the CIA's timer, with the raster agreeing):
+3.5 ms on average and 7 ms at most for an XM of 20 channels, 1.2 and 2.6 ms for one of 16,
+0.7 ms for a MOD of 6 channels (8 ms where every channel has a note: finding a note's place
+among the periods is slow). Ticks are 15 to 20 ms apart. Xemu's clock is not the real
+CPU's, so this says how the cost is spread and roughly how big it is, no more; and an
+emulator cannot say how any of it sounds.
 
 **Against another player.** `modcompare.py` plays a module with modplay (on the model) and
 with [libopenmpt](https://lib.openmpt.org/) (`brew install libopenmpt`), which is the
@@ -476,6 +596,40 @@ All 4 755 rows are the same row and as long. What is left:
 - A sample number with no note, 7 ticks in DELERIUM and 3 in the tests: the tick the new
   sample starts on, where libopenmpt fades the old one out and the pitch cannot be read.
 
+(Read again on 2026-11-25 with the player in overlays and the comparison taking a pitch from
+two cycles where a tick has no three: 106 522 of the 106 719, CHEESE two fewer and RCDROPS
+one, and the MODs 111 444 of 111 476 as before.)
+
+**XMs against libopenmpt** (2026-11-25, the first 40 seconds, 5 cents and 0.5 dB). The two
+test modules of `makexm.py`: 2 990 of 3 000 ticks with linear periods, 2 991 with an Amiga's
+(what differs is a tremolo's level on five ticks, and single ticks where a note begins).
+Four real modules, all made with FastTracker 2:
+
+| Module          | Channels | Ticks that agree       |
+|-----------------|----------|------------------------|
+| PAGER11.XM      | 8        | 12 520 of 12 587       |
+| kill.xm         | 16       | 3 386 of 3 386         |
+| alien.xm        | 20       | 26 579 of 26 613       |
+| clown.xm        | 18       | 14 404 of 14 405       |
+
+All 1 933 rows are the same row and as long. Most of the 102 ticks that differ are
+in PAGER11.XM, in one instrument whose volume envelope, panning envelope and own vibrato all
+move at once: single ticks a dB or so apart, and the tick on which a note that is sounding
+is started again from an envelope that begins at nothing, where libopenmpt takes the tick
+to fade the old note out and modplay is silent at once.
+
+Two allowances are in those numbers. libopenmpt glides to a tick's volume across the whole
+tick, as FastTracker does, and the comparison allows for that as it does for an S3M's
+slides. And libopenmpt's levels of an XM move in steps, as if its envelopes had 256 values
+and were rounded down, so the last ticks of a sound that dies away are a step or two lower
+there than the straight line modplay follows: a quiet tick may be two such steps off. With one step allowed and no more, kill.xm, whose sounds
+are all short and die away, has 3 096 of its 3 386 ticks agree and alien.xm 25 876.
+
+A thing to know about libopenmpt and XMs: it decides from the layout of the file whether
+FastTracker wrote it, and plays a file that looks otherwise by other rules (a straight-line
+pan law, for one). The comparison writes its one-channel copies of a module as FastTracker
+would (an instrument with no samples as 33 bytes); before it did, every level was off.
+
 An S3M's overall level is the player's choice (libopenmpt takes the file's mixing volume,
 modplay the number of voices), so levels are compared against each channel's usual
 difference. Left and right were compared on the test module: the share on the right is
@@ -533,7 +687,8 @@ hurry through the ticks it missed.
   interrupt, or off FRAMES as the [module player](#module-player) does.
 - More than 512 KB. The registers have room for 16 MB; the attic RAM would have to be
   shared with the CPU and be fast enough for 32 voices.
-- Per-voice ramp rates, volume envelopes, filters (which IT modules want).
+- Per-voice ramp rates and filters (which IT modules want). Envelopes: an XM's are the
+  player's work, a tick at a time.
 
 ## Files
 
@@ -547,10 +702,13 @@ hurry through the ticks it missed.
 | `src/vhdl/test_megagus_bus.vhdl`        | Testbench: the engine in `slow_devices.vhdl`      |
 | `src/tests/megagus/megagustest.c`       | The test program for the MEGA65                   |
 | `src/tests/megagus/megagustest_host.py` | The same program on this computer, with the model |
-| `src/utilities/megagus/modplay.c`       | The module player (MOD and S3M)                   |
+| `src/utilities/megagus/modplay.c`       | The module player (MOD, S3M and XM)               |
+| `src/utilities/megagus/modplay.cfg`     | Its plan of memory: the program and its overlays  |
 | `src/utilities/megagus/modplay_host.py` | The player on this computer, and its self-test    |
 | `src/utilities/megagus/makemod.py`      | The test MODs and a tune of its own               |
 | `src/utilities/megagus/makes3m.py`      | The test S3Ms, one too big for the sample RAM     |
+| `src/utilities/megagus/makexm.py`       | The test XMs, one too big for the sample RAM      |
+| `src/utilities/megagus/xmfile.py`       | XMs read and written, for tests and comparison    |
 | `src/utilities/megagus/modcompare.py`   | The player against libopenmpt, channel by channel |
 | `src/utilities/megagus/hwcompare.py`    | A recording of the MEGA65 against the model       |
 | `docs/megagus-programming.md`           | How to use it from BASIC, C and assembly          |

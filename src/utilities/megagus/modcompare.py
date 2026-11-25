@@ -15,6 +15,9 @@ Two things are compared:
                  the waveforms correlate, at the best shift within a few milliseconds, and are
                  as loud as each other; where they do not, the row and its commands are listed.
 
+MODs, S3Ms and XMs. An XM's one-channel copies are written as FastTracker 2 writes its files
+(xmfile.py): libopenmpt plays an XM whose layout is another tracker's by other rules.
+
 modplay runs as in modplay_host.py: the same source, against the engine's model.
 """
 
@@ -29,9 +32,11 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import xmfile  # noqa: E402
 RATE = 48000
 GUARD = 96
 CENTS, DB = 5.0, 0.5      # what counts as the same pitch and level
+STEP = 0.0005             # the steps libopenmpt's own levels of an XM move in, where a channel does not show them
 SIGS = {b"M.K.": 4, b"M!K!": 4, b"FLT4": 4, b"4CHN": 4, b"6CHN": 6, b"8CHN": 8, b"OCTA": 8, b"CD81": 8}
 NOTES = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"]
 PERIODS = [856, 808, 762, 720, 678, 640, 604, 570, 538, 508, 480, 453]
@@ -63,7 +68,7 @@ def reference(data, seconds, vblank=False, chunk=8):
         sys.exit("libopenmpt can't load it")
     lib.openmpt_module_set_render_param(mod, 3, 2)      # linear interpolation, as the engine's
     lib.openmpt_module_set_render_param(mod, 2, 100)    # stereo separation as the file has it
-    if is_s3m(data):
+    if is_s3m(data) or is_xm(data):
         lib.openmpt_module_set_render_param(mod, 4, 0)  # no gliding to a new volume: its level is the tick's
     lib.openmpt_module_ctl_set_boolean(mod, b"render.resampler.emulate_amiga", 0)
     if vblank:
@@ -232,10 +237,85 @@ def s3m_cell(data, order, row, ch):
     return f"{note} {ins} {vol} {fx}"
 
 
+# -----------------------------------------------------------------------------------------------
+# XM: the same for FastTracker 2 modules
+# -----------------------------------------------------------------------------------------------
+XM_FX = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def is_xm(data):
+    return data[:17] == xmfile.SIGNATURE
+
+
+def xm_solo(data, ch):
+    """Only this channel's notes; of the others, what steers the song: jumps, breaks, speed and
+    tempo, the song's volume, loops and delays"""
+    x = xmfile.load(data)
+    for pat in x.patterns:
+        for row in pat:
+            for c, cell_ in enumerate(row):
+                if c == ch:
+                    continue
+                fx, arg = cell_[3], cell_[4]
+                keep = fx in (0xB, 0xD, 0xF, 0x10, 0x11) or (fx == 0xE and arg >> 4 in (6, 0xE))
+                row[c] = [0, 0, 0, fx, arg] if keep else [0, 0, 0, 0, 0]
+    return xmfile.save(x)
+
+
+def xm_toned(data):
+    """Every sample one cycle of a sine, looped: as long a cycle as keeps the highest note the
+    song plays on it under 4 kHz"""
+    import math
+    x = xmfile.load(data)
+    top = {}                                    # (instrument, sample) -> highest note played
+    for pat in x.patterns:
+        last = [0] * x.channels
+        for row in pat:
+            for c, (note, ins, vol, fx, arg) in enumerate(row):
+                if ins:
+                    last[c] = ins
+                if 1 <= note <= 96 and 1 <= last[c] <= len(x.instruments):
+                    i = x.instruments[last[c] - 1]
+                    if i.samples:
+                        k = i.notemap[note - 1] if i.notemap[note - 1] < len(i.samples) else 0
+                        key = (last[c], k)
+                        top[key] = max(top.get(key, 0), note - 1 + i.samples[k].relnote + (4 if fx in (0, 1) else 0))
+    for n, i in enumerate(x.instruments):
+        for k, smp in enumerate(i.samples):
+            if not smp.data:
+                continue
+            hz = 8363 * 2 ** ((top.get((n + 1, k), 48) - 48) / 12)
+            ln = 16
+            while ln < 256 and hz / ln > 4000:
+                ln *= 2
+            smp.data = [int(round(127 * math.sin(2 * math.pi * j / ln))) for j in range(ln)]
+            smp.bits, smp.loop, smp.pingpong = 8, (0, ln), False
+    return xmfile.save(x)
+
+
+_XM = {}
+
+
+def xm_cell(data, order, row, ch):
+    if id(data) not in _XM:
+        _XM.clear()
+        _XM[id(data)] = xmfile.load(data)
+    x = _XM[id(data)]
+    p = x.orders[order] if order < len(x.orders) else 999
+    if p >= len(x.patterns) or row >= len(x.patterns[p]):
+        return "... .. .. ..."
+    note, ins, vol, fx, arg = x.patterns[p][row][ch]
+    n = "..." if not note else "===" if note == 97 else NOTES[(note - 1) % 12] + str((note - 1) // 12)
+    return (f"{n} {ins:02d} " if ins else f"{n} .. ") + (f"{vol:02X} " if vol else ".. ") + \
+        (f"{XM_FX[fx] if fx < 36 else '?'}{arg:02X}" if fx or arg else "...")
+
+
 def solo(data, ch, channels):
     """The module with only this channel's notes: the others keep what steers the song"""
     if is_s3m(data):
         return s3m_solo(data, ch)
+    if is_xm(data):
+        return xm_solo(data, ch)
     d = bytearray(data)
     npat = max(d[952:1080]) + 1
     for i in range(npat * 64 * channels):
@@ -252,6 +332,8 @@ def solo(data, ch, channels):
 def cell(data, channels, order, row, ch):
     if is_s3m(data):
         return s3m_cell(data, order, row, ch)
+    if is_xm(data):
+        return xm_cell(data, order, row, ch)
     p = data[952 + order]
     o = 1084 + ((p * 64 + row) * channels + ch) * 4
     period = ((data[o] & 15) << 8) | data[o + 1]
@@ -301,6 +383,8 @@ def toned(data):
     import math
     if is_s3m(data):
         return s3m_toned(data)
+    if is_xm(data):
+        return xm_toned(data)
     d = bytearray(data[:1084 + (max(data[952:1080]) + 1) * 64 * SIGS[data[1080:1084]] * 4])
     wave_ = bytes(int(round(127 * math.sin(2 * math.pi * i / 16))) & 255 for i in range(16))
     for i in range(31):
@@ -324,7 +408,7 @@ def measure(x, a, b):
     if len(up) >= 2:
         whole = seg[up[0] + 1:up[-1] + 1]
         level = float(np.sqrt(2 * np.mean(whole * whole)))
-    if len(up) < 3 or level < 2e-4:
+    if len(up) < 2 or level < 2e-4:
         return 0.0, level
     t = up + (-seg[up]) / (seg[up + 1] - seg[up])
     # the cycles' lengths, but for one that is cut short or stretched where a sample starts
@@ -401,21 +485,37 @@ def one_channel_toned(args):
             # reference would measure if it were heading for modplay's level
             res.append((mrows[i][1], mrows[i][2], t, cents, db,
                         cell(data, channels, mrows[i][1], mrows[i][2], ch), fr, fm,
-                        20 * np.log10(glide / lr) if glide > 0 and lr >= 2e-4 else db))
+                        20 * np.log10(glide / lr) if glide > 0 and lr >= 2e-4 else db, lr, lm))
     gain = 0.0
-    if is_s3m(data):
+    if is_s3m(data) or is_xm(data):
         # How loud an S3M is as a whole is the player's choice (libopenmpt takes the file's
         # mixing volume, modplay the number of voices): what is compared is every tick's
         # level against the channel's usual difference
         # (taken from the levels with the glide allowed for: in a channel that slides most of
         # the time the plain ones would put it too low)
-        both = [r[8] for r in res if abs(r[4]) < 90]
+        both = [r[8] for r in res if abs(r[4]) < 90 and r[9] > 20 * STEP]
+        if not both:
+            both = [r[4] for r in res if abs(r[4]) < 90]
         gain = float(np.median(both)) if both else 0.0
         fixed = []
+        xm = is_xm(data)
+        # libopenmpt's level of an XM moves in steps (its envelopes have 256 values and round
+        # down, and its mixing volume rounds again): the quietest tick of a channel that fades
+        # out is one step. A quiet tick may be two of them off.
+        quiet = [r[9] for r in res if 2e-4 <= r[9] < 0.002]
+        step = min(2 * min(quiet), 2 * STEP) if quiet else STEP
         for r in res:
             db = r[4] - gain if abs(r[4]) < 90 else r[4]
             alt = r[8] - gain
-            fixed.append(r[:4] + (alt if abs(alt) < abs(db) else db,) + r[5:8])
+            if abs(alt) < abs(db):
+                db = alt
+            if xm and abs(db) < 90:
+                # libopenmpt's level of an XM moves in steps: a quiet tick can be a step off
+                slack = 20 * np.log10(1 + step / max(r[9], 1e-9))
+                db = float(np.sign(db)) * max(0.0, abs(db) - slack)
+            elif xm and max(r[9], r[10] / 10 ** (gain / 20)) < 2 * step:
+                db = 0.0        # one of the two is silent and the other within those steps of it
+            fixed.append(r[:4] + (db,) + r[5:8])
         res = fixed
     else:
         res = [r[:8] for r in res]
@@ -465,13 +565,18 @@ def main():
     ap.add_argument("--waves", action="store_true", help="also lay the waveforms over each other")
     a = ap.parse_args()
     data = open(a.mod, "rb").read()
-    s3m = is_s3m(data)
-    chans = s3m_channels(data) if s3m else list(range(SIGS.get(data[1080:1084], 0)))
+    s3m = is_s3m(data) or is_xm(data)       # what follows is the same for both
+    if is_xm(data):
+        chans = list(range(xmfile.load(data).channels))
+    else:
+        chans = s3m_channels(data) if s3m else list(range(SIGS.get(data[1080:1084], 0)))
     channels = len(chans)
     if not channels:
         sys.exit("not a module modplay plays")
     name = os.path.basename(a.mod)
 
+    import modplay_host
+    modplay_host.build(False)       # once, before the channels are played side by side
     ref, rrows = reference(data, a.seconds, a.vblank)
     mine, mrows = ours(a.mod, a.seconds, a.vblank)
     off, n, bad = timeline(mrows, rrows)

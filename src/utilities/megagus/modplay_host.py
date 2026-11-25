@@ -305,6 +305,7 @@ def selftest():
         else:
             print("  both builds told the engine exactly the same")
     failed |= selftest_s3m(work)
+    failed |= selftest_xm(work)
     print("FAIL" if failed else "PASS")
     sys.exit(1 if failed else 0)
 
@@ -360,6 +361,47 @@ def selftest_s3m(work):
     ok = "2 samples made smaller" in said and all(abs(f - want) < 0.5 and peak > 5000 for f, want, peak in got)
     print(f"big.s3m: {said}; " + ", ".join(f"{f:.1f} Hz" for f, _, _ in got) + (" as they should be" if ok else " WRONG"))
     return failed or not ok
+
+
+def selftest_xm(work):
+    """The XM test modules (makexm.py): both builds must tell the engine the same, with linear
+    periods and with an Amiga's, and the samples of the module that is too big for the sample
+    RAM, a 16-bit one among them, must still sound at their pitch. Whether the commands are
+    played right is modcompare.py's to say."""
+    subprocess.run([sys.executable, os.path.join(HERE, "makexm.py")], check=True)
+    failed = False
+    for test in ("test", "test_amiga"):
+        traces = []
+        for sim in (False, True):
+            r = Run(os.path.join(work, test + ".xm"), sim)
+            trace = os.path.join(work, test + ("_xm_sim.trace" if sim else "_xm_host.trace"))
+            r.trace(trace)
+            traces.append(open(trace).read())
+            peak = max(max(map(abs, r.left)), max(map(abs, r.right)))
+            failed |= r.code != 0 or peak >= 32767 or len(r.rows) < 120
+        same = traces[0] == traces[1]
+        print(f"{test}.xm: {len(r.rows)} rows, peak {peak}; both builds told the engine "
+              f"{'exactly the same' if same else 'DIFFERENT things'}")
+        failed |= not same
+    a, b = Run(os.path.join(work, "big.xm")), Run(os.path.join(work, "big.xm"), sim=True)
+    same = a.left == b.left and a.right == b.right
+    print(f"big.xm: both builds {'sound exactly the same' if same else 'DIFFER'}")
+    said = " ".join(a.said)
+
+    def hz(x):
+        ups = [i for i in range(len(x) - 1) if x[i] < 0 <= x[i + 1]]
+        return (len(ups) - 1) * RATE / (ups[-1] - ups[0]) if len(ups) > 1 else 0.0
+
+    # rows 4..12 of each 16: the 16-bit sample (left), the long one (right), the loop (left),
+    # the long one again from 32768 frames in
+    got = []
+    for first, side, want in ((0, a.left, 8363 / 19), (16, a.right, 8363 / 19), (32, a.left, 8363 / 64),
+                              (48, a.right, 8363 / 19)):
+        x, y = a.rows[first + 4][0], a.rows[first + 12][0]
+        got.append((hz(side[x:y]), want, max(map(abs, side[x:y]))))
+    ok = "2 samples made smaller" in said and all(abs(f - want) < 0.5 and peak > 2000 for f, want, peak in got)
+    print(f"big.xm: {said}; " + ", ".join(f"{f:.1f} Hz" for f, _, _ in got) + (" as they should be" if ok else " WRONG"))
+    return failed or not same or not ok
 
 
 def main():

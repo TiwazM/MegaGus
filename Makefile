@@ -888,11 +888,15 @@ $(TESTDIR)/megagus/megagustest.prg:       $(TESTDIR)/megagus/megagustest.c $(CC6
 	$(call mbuild_header,$@)
 	$(CL65) -O -o $*.prg --mapfile $*.map $<
 
-# MegaGus MOD player (docs/megagus.md); modplay_host.py runs the same source on the host.
+# MegaGus module player (docs/megagus.md); modplay_host.py runs the same source on the host.
 # Its files come from the Hypervisor, with mega65-libc's two assembly sources for that.
-$(UTILDIR)/megagus/modplay.prg:       $(UTILDIR)/megagus/modplay.c $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s $(CC65_DEPEND)
+# The program is more than C64-mode memory holds at once, so it is in parts (modplay.cfg):
+# modplay.prg and four overlays, which go on the SD card next to it as MODPLAY.OV1 to .OV4.
+# STAMP is the build's number: the program does not take another build's overlays.
+$(UTILDIR)/megagus/modplay.prg:       $(UTILDIR)/megagus/modplay.c $(UTILDIR)/megagus/modplay.cfg $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s $(CC65_DEPEND)
 	$(call mbuild_header,$@)
-	$(CL65) -O -o $*.prg --mapfile $*.map $< $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s
+	$(CL65NC) -t c64 -O -C $(UTILDIR)/megagus/modplay.cfg -DSTAMP=$(shell expr `date +%s` % 32000 + 1) -o $*.prg --mapfile $*.map $< $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s
+	for n in 1 2 3 4; do mv $*.prg.$$n $(UTILDIR)/megagus/MODPLAY.OV$$n; done
 
 $(UTILDIR)/mega65_config.prg:       $(UTILDIR)/mega65_config.o $(CC65_DEPEND)
 	$(call mbuild_header,$@)

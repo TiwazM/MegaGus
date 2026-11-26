@@ -77,13 +77,17 @@ architecture behavioural of cia6526 is
   signal reg_porta_read : unsigned(7 downto 0) := (others => '0');
   signal reg_portb_read : unsigned(7 downto 0) := (others => '0');
 
-  signal reg_timera : unsigned(15 downto 0) := x"0001";
-  signal reg_timera_visible : unsigned(15 downto 0) := x"0001";
-  signal reg_timera_latch : unsigned(15 downto 0) := x"0001";
+  -- A 6526's timers and their latches are all ones after power-on and after a reset.
+  -- (They were 1 and 0 here. ROM 920413 reads CIA 2's timer A for TI before it has set it
+  -- up, and waits there for bit 6 or 7 of its low byte: with the latch at 1 it waited for
+  -- ever, where it had once been let through by the timer showing $FFFF as it ran out.)
+  signal reg_timera : unsigned(15 downto 0) := x"FFFF";
+  signal reg_timera_visible : unsigned(15 downto 0) := x"FFFF";
+  signal reg_timera_latch : unsigned(15 downto 0) := x"FFFF";
 
-  signal reg_timerb : unsigned(15 downto 0) := x"0000";
-  signal reg_timerb_visible : unsigned(15 downto 0) := x"0000";
-  signal reg_timerb_latch : unsigned(15 downto 0) := x"0000";
+  signal reg_timerb : unsigned(15 downto 0) := x"FFFF";
+  signal reg_timerb_visible : unsigned(15 downto 0) := x"FFFF";
+  signal reg_timerb_latch : unsigned(15 downto 0) := x"FFFF";
 
   signal reg_timera_tick_source : std_logic := '0'; 
   signal reg_timera_oneshot : std_logic := '0';
@@ -416,6 +420,14 @@ begin  -- behavioural
         imask_alarm <= '0';
         imask_tb <= '0';
         imask_ta <= '0';
+        -- and the timers and their latches are all ones again, as a 6526's are: a program
+        -- may have left a short count in a latch, which the ROM would meet as it starts
+        reg_timera <= x"FFFF";
+        reg_timera_visible <= x"FFFF";
+        reg_timera_latch <= x"FFFF";
+        reg_timerb <= x"FFFF";
+        reg_timerb_visible <= x"FFFF";
+        reg_timerb_latch <= x"FFFF";
       end if;
 
       portbddr <= reg_portb_ddr;

@@ -210,6 +210,46 @@ and start it again.
   looping at FREQ `$010000`, it moves exactly one byte each output frame, and its POS is
   the clock. `tune.c` falls back to that.
 
+## Ahead of time: the queue
+
+A tune's changes have to come at the right moment, to a millisecond or so, and a program
+is not always free at that moment: an effect that fills the whole frame, a loader, code
+that must not be interrupted. From version 4 the engine can be handed the writes ahead of
+time, each with the frame it is for, and makes them itself on that frame.
+
+| Address    | Name  | What                                                             |
+|------------|-------|------------------------------------------------------------------|
+| `$EFFF218` | QTIME | 3 bytes: the frame (as FRAMES counts) the next writes are for    |
+| `$EFFF21B` | QREG  | 2 bytes: the register the next write is for, as from `$EFFF000`  |
+| `$EFFF21D` | QDATA | write: queue this value for that register; QREG goes up by one   |
+| `$EFFF21E` | QSTAT | read: bit 0 empty, bit 1 full, bit 7 a write was lost; write     |
+|            |       | `$80`: forget all that is queued                                 |
+| `$EFFF21F` | QFREE | read: room, in sixteens of writes                                |
+
+A note on voice 2, a quarter of a second from now, in C:
+
+    unsigned long t = frames() + 12000;          /* FRAMES, read low byte first */
+    lpoke(0xEFFF218UL, t); lpoke(0xEFFF219UL, t >> 8); lpoke(0xEFFF21AUL, t >> 16);
+    lpoke(0xEFFF21BUL, 0x20); lpoke(0xEFFF21CUL, 0);      /* voice 2's CTRL: $020 */
+    for (i = 0; i < 16; i++)
+      lpoke(0xEFFF21DUL, note[i]);               /* CTRL without RUN, PAN, ... END */
+    lpoke(0xEFFF21BUL, 0x20);                    /* and CTRL again, with RUN */
+    lpoke(0xEFFF21DUL, note[0] | 1);
+
+All of it takes effect on frame `t`, together, before that frame's voices are worked out.
+
+- Queue the writes in the order of their frames: they are made in the order they were
+  queued. One for a frame that has gone by is made at once.
+- The queue holds 4096 writes. A tracker's tick is some tens of them, its fullest (eight
+  notes at once) 136: half a second of an eight-channel tune is a few hundred. Read QFREE
+  if in doubt; a write that finds the queue full is lost and sets bit 7 of QSTAT.
+- To pause: switch the engine off (CONTROL = 0). FRAMES stands still, the voices hold, and
+  what is queued waits; CONTROL = 1 goes on from there. To stop and start elsewhere in the
+  tune: write `$80` to QSTAT, stop the voices, and queue from the new place.
+- Do not write to FRAMES while writes are queued: their times are in its count.
+- A queued write can be to a global register too: CONTROL = 0 queued for a frame stops
+  the engine exactly there; steps of MASTER fade a tune out.
+
 ## Versions
 
 `$EFFF202` reads the engine's version. A program written for one version runs on every
@@ -221,9 +261,12 @@ later one.
 | 2       | 2026-11-25 | FRAMES at `$EFFF214`: the engine's own clock               |
 | 3       | 2026-11-26 | A stopped voice fades its last value: CTRL = 0 stops any   |
 |         |            | voice cleanly. This is the engine of release 1.0           |
+| 4       | 2026-11-27 | The queue: writes handed over ahead of time, each made on  |
+|         |            | its frame. On the branch `megagus-queue`, not released     |
 
-A program that wants to run on all three reads the version once and, below 3, stops its
-voices the old way (see [Playing it](#playing-it)); below 2, keeps time with a voice.
+A program that wants to run on all of them reads the version once and, below 3, stops its
+voices the old way (see [Playing it](#playing-it)); below 2, keeps time with a voice. The
+queue is there from 4 only.
 
 ## With the rest of the MEGA65's sound
 

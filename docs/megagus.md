@@ -144,6 +144,21 @@ What it keeps is the idea; what it changes:
   the player plays ZEN.S3M as the model does (0.943) and ends in BASIC. It is the core of
   release 1.0 in place of the one before. Not tried: this build from a flash slot, and
   with a ROM of 920417 or later (which do not look at the timer that way).
+- A queue of register writes, each made by the engine on the frame it was queued for
+  (2026-11-27, VERSION 4, on the branch `megagus-queue`; [what it is](#global-registers)):
+  for a program that cannot be there on every tick, and for which an interrupt is no
+  answer either (a demo's effects that take the interrupt vectors' memory for something
+  else). The VHDL and the model agree on it in simulation: 16 123 queued writes among
+  101 514 accesses, each made on its frame or after and in its order, a tick's writes all
+  in before the frame's first voice (to 140 of them), the queue full, emptied, written
+  while the engine is stopped, and with resets and writes to the queue's own registers
+  queued in it; the test fails on a queue that is a frame early, that lets the voices go
+  before the writes, that does not step its register, or reads its head a clock too soon.
+  The R6 core with it was built (`fffc500`): the setup slack is 0.005 ns, and two paths of
+  the video upscaler, which this does not touch, missed hold by 0.023 ns; a hold fix after
+  routing (`phys_opt_design -hold_fix`, then `route_design`) mended them, and that
+  bitstream has all constraints met (worst hold slack 0.011 ns). It has not been loaded
+  into a MEGA65: nothing of the queue has run on the machine yet.
 - No emulator support yet.
 
 ## Where it is
@@ -153,7 +168,7 @@ What it keeps is the idea; what it changes:
 | `$E000000`-`$E07FFFF` | Sample RAM, 512 KB                                         |
 | `$E080000`-`$EFFEFFF` | Reserved for more sample RAM (reads 0)                     |
 | `$EFFF000`-`$EFFF1FF` | Voice registers: voice *v* (0-31) at `$EFFF000 + v*16`     |
-| `$EFFF200`-`$EFFF211` | Global registers                                           |
+| `$EFFF200`-`$EFFF21F` | Global registers, the queue's among them                   |
 
 A sample address in a voice register is the low 24 bits of its CPU address: sample RAM
 address `$000000` is `$E000000`.
@@ -274,7 +289,8 @@ PAGER11.XM has over a hundred in 40 seconds on any engine, and as many in libope
 |------------|---------|-----|-------|---------------------------------------------------------|
 | `$EFFF200` | ID      | R   | `$4D` | "M"                                                     |
 | `$EFFF201` | ID      | R   | `$47` | "G"                                                     |
-| `$EFFF202` | VERSION | R   | `$03` | 2: with FRAMES; 3: a stopped voice fades its last value |
+| `$EFFF202` | VERSION | R   | `$04` | 2: with FRAMES; 3: a stopped voice fades its last       |
+|            |         |     |       | value; 4: with the queue                                |
 | `$EFFF203` | RAMSIZE | R   | `$08` | Sample RAM in units of 64 KB                            |
 | `$EFFF204` | CONTROL | R/W | `$01` | Bit 0: engine on. Bit 7 (write): reset the engine       |
 | `$EFFF205` | MASTER  | R/W | `$20` | Master volume: `$40` is the sum as it is                |
@@ -284,6 +300,13 @@ PAGER11.XM has over a hundred in 40 seconds on any engine, and as many in libope
 | `$EFFF20C` | ENDED   | R/W | 0     | 4 bytes, a bit a voice; write 1 to clear                |
 | `$EFFF210` | RATE    | R   | 48000 | 2 bytes: output frames a second                         |
 | `$EFFF214` | FRAMES  | R/W | 0     | 4 bytes: frames played; a write to `$EFFF214` clears it |
+| `$EFFF218` | QTIME   | R/W | 0     | 3 bytes: the frame the writes queued next are for       |
+| `$EFFF21B` | QREG    | R/W | 0     | 2 bytes: the register the write queued next is for      |
+| `$EFFF21D` | QDATA   | W   |       | Queue a write of this value; QREG goes up by one        |
+| `$EFFF21E` | QSTAT   | R/W | `$01` | Bit 0: empty. Bit 1: full. Bit 7: a write was lost to a |
+|            |         |     |       | full queue. Write bit 7: forget all that is queued      |
+| `$EFFF21F` | QFREE   | R   | `$FF` | Room in the queue, in sixteens of writes (255: 4080 or  |
+|            |         |     |       | more)                                                   |
 
 To find it, read `$EFFF200` and `$EFFF201`: on a core without MegaGus they don't read
 "MG".
@@ -303,6 +326,42 @@ or two bytes are enough for most (two go round every 1.365 s). A write of any va
 `$EFFF214` starts it from 0, and so does a reset. It is there from VERSION 2; before that a
 silent voice had to be the clock (a voice with VOL 0 and FREQ `$010000` moves its POS a
 byte a frame).
+
+**The queue** (from VERSION 4) holds register writes that the engine makes itself, each on
+the frame it was queued for. A program that plays a tune need not be there on every tick:
+whenever it has the time, it hands over what the next half second or so needs, and the
+engine keeps the tune's time to the frame. That is for programs that cannot be interrupted
+when a tick is due: a demo whose effects have the machine to themselves, a game in the
+middle of a frame.
+
+To queue writes: set QTIME to the frame they are for (the value FRAMES will have, its low
+24 bits), set QREG to the first register's address as it is from `$EFFF000` (a voice's
+registers are `$000` to `$1FF`, the globals `$200` and up), and write the values to QDATA
+one after the other: each is queued for the register after the one before, so a note's
+sixteen bytes are sixteen writes to QDATA. QTIME and QREG stay as they are until written
+again. The queue holds 4096 writes; one written to a full queue is lost and sets bit 7 of
+QSTAT.
+
+The engine makes a queued write when FRAMES is at its time or past it, in the order the
+writes were queued: one queued for a frame after its neighbour's waits behind it, so queue
+them in the order of their frames. A write whose frame has gone by when it is queued (or
+comes to the head) is made at once. "Past" is up to 8 388 607 frames, nearly three minutes;
+further ahead than that counts as gone by.
+
+All the writes for one frame are in before the frame's first voice is looked at, as long as
+they are no more than 140 (two clocks each; a tracker's fullest tick, eight notes at once,
+is 136): the voices see a tick's writes together, on the same frame, which a CPU writing
+them one by one cannot promise. With more than 140 the rest follow while the frame's
+voices are already being worked through, as a CPU's would. The CPU's own accesses come
+first on the bus, and a queued write waits the two clocks one takes.
+
+A queued write does what the same write from the CPU would: CONTROL stops the engine on a
+frame (and then FRAMES stands still, and what is queued behind it waits), MASTER can fade a
+tune out in steps with nobody there. Only the queue's own registers (`$EFFF218` to
+`$EFFF21F`) are not written from the queue. While the engine is switched off nothing
+becomes due, and what is queued stays; a reset (the line, or CONTROL's bit 7, queued or
+not) empties the queue. A write to FRAMES does not: what is queued then waits for the new
+count to reach its times, so empty the queue first (QSTAT bit 7) and queue again.
 
 **MASTER** scales the sum of all voices: `out = sum * MASTER / 64`, clipped to 16 bits. A
 voice at full VOL with a full-scale sample, panned hard to one side, is full scale there
@@ -861,7 +920,8 @@ hurry through the ticks it missed.
 ## Not there (yet)
 
 - Interrupts. Poll RUNNING, ENDED, POS or FRAMES; time a player with a raster or CIA
-  interrupt, or off FRAMES as the [module player](#module-player) does.
+  interrupt, or off FRAMES as the [module player](#module-player) does; or hand the engine
+  the writes ahead of their time, with [the queue](#global-registers).
 - More than 512 KB. The registers have room for 16 MB; the attic RAM would have to be
   shared with the CPU and be fast enough for 32 voices.
 - Per-voice ramp rates and filters (which IT modules want). Envelopes: an XM's are the

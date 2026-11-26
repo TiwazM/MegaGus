@@ -23,9 +23,8 @@ What it keeps is the idea; what it changes:
 - Built on mega65-core's `development` branch (`3c0c27fe`), for the MEGA65 R6 only
   (`megagus_ram_bits => 19` in `mega65r6.vhdl`; other boards build without it).
 - Verified in simulation (see [Tests](#tests)) and built for the R6 (Vivado 2026.1,
-  2026-11-22): all timing constraints met (worst slack 0.082 ns), 267 of 365 block RAMs
-  (128 of them the sample RAM), 76 888 LUTs (57 %) in all. The engine's multiplier is one
-  DSP block, its voice tables are LUT RAM.
+  2026-11-22): all timing constraints met (worst slack 0.082 ns). What it takes of the
+  FPGA is under [In the FPGA](#in-the-fpga).
 - Run on a MEGA65 R6 (2026-11-23, the bitstream loaded over JTAG): the 12 tests of the
   [test program](#test-program) pass and its nine sounds all play.
 - The engine's output on that machine is the model's, bit for bit: read back through the
@@ -126,6 +125,25 @@ DMA and megabyte `$E0` as the destination to load samples.
 The engine's audio joins the MEGA65 mixer's digital audio pair (the one the CPU's audio DMA
 channels and `$D6F8`-`$D6FB` use) and is governed by that pair's mixer coefficients, after
 its own master volume. The two sum, and clip rather than wrap.
+
+## In the FPGA
+
+Of the R6's FPGA (XC7A200T), from Vivado's report by module on the routed VERSION 3 build
+(2026-11-25):
+
+|                     | MegaGus | of the FPGA | The whole core | of the FPGA |
+|---------------------|--------:|------------:|---------------:|------------:|
+| LUTs                |   2 208 |       1.6 % |         77 031 |      57.6 % |
+| of them LUT RAM     |     210 |       0.5 % |         13 788 |      30.5 % |
+| Flip-flops          |   1 206 |      0.45 % |         48 219 |      18.0 % |
+| Block RAMs, 36 kbit |     128 |      35.1 % |            267 |      73.2 % |
+| DSP blocks          |       1 |      0.14 % |            151 |      20.4 % |
+
+The 128 block RAMs are the sample RAM, 4 KB each; the core has five 18 kbit ones besides,
+so about 95 of the 365 are free and a megabyte of sample RAM would not fit in them. The engine is
+2 004 of the LUTs, and choosing among the sample RAM's blocks the other 204. The LUT RAM is
+the voices' tables, and the DSP block the one multiplier that interpolation, volume and pan
+share. The address decoding outside the `megagus` module, a few gates, is not counted.
 
 ## Voice registers
 

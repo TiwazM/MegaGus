@@ -6,7 +6,9 @@ any pitch, volume and place between left and right, mixed at 48 kHz, with no wor
 CPU. It is part of the MEGA65's FPGA core: this repository is the MEGA65 core
 (`development`, `3c0c27fe`) with MegaGus added.
 
-It comes with a module player that plays MOD, S3M and XM files from the SD card.
+It comes with a module player that plays MOD, S3M and XM files from the SD card, those
+with more than 512 KB of samples too: it makes the biggest samples smaller as it loads
+them, and only as many as it has to.
 
 - 32 voices, each with its own sample, pitch (24 bits), volume (16 bits) and panning
 - 512 KB of sample RAM in the MEGA65's address space: the DMA or `BLOAD` fills it
@@ -29,7 +31,8 @@ has been built, and no emulator has MegaGus yet. The engine is checked against a
 model in simulation; on an R6 the first version's output was read back and was the model's,
 bit for bit, and the later ones were checked there with the test program and by recordings.
 [docs/megagus.md](docs/megagus.md#status) has what was tested and how, and what is
-[not there](docs/megagus.md#not-there-yet): interrupts, more than 512 KB, filters.
+[not there](docs/megagus.md#not-there-yet): interrupts, more sample RAM than 512 KB,
+filters.
 
 ## The release
 
@@ -83,9 +86,18 @@ then
 | ESC                 | back to the list; in the list, leave                            |
 
 It plays MODs of 4 to 32 channels, S3Ms (without AdLib instruments) and XMs, with their
-effects, compared tick by tick against libopenmpt. A module with more samples than the
-512 KB has its biggest ones made smaller as it loads. Not IT, and not the old 15-sample
-MODs. [More about the player](docs/megagus.md#module-player).
+effects, compared tick by tick against libopenmpt. Not IT, and not the old 15-sample MODs.
+
+**Modules bigger than the sample RAM play too.** The file itself can be nearly 8 MB (it
+goes into the attic RAM). When its samples are more than 512 KB, the player makes the
+biggest ones smaller as it copies them, one at a time until all fit: a 16-bit sample is
+kept as 8-bit, then a sample at half its rate, then at a quarter. The others stay as they
+are, and short loops are left alone so that they stay in tune. A smaller sample sounds at
+its pitch, a little duller; the samples screen (F3) marks which they are. On the R6
+`clown.xm` (18 channels, 1 066 KB, 6 samples made smaller) and `alien.xm` (20 channels,
+863 KB, 5 made smaller) play this way, and their recordings match what the model plays.
+
+[More about the player](docs/megagus.md#module-player).
 
 ## Programming it
 

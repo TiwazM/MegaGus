@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/megagus-logo.png" alt="MegaGus" width="640"></p>
+
 # MegaGus
 
 A 32-voice wavetable sound engine for the [MEGA65](https://mega65.org), in the spirit of

@@ -120,7 +120,9 @@ What it keeps is the idea; what it changes:
   ([mega65-core#899](https://github.com/MEGA65/mega65-core/issues/899)) and ROM 920417 no
   longer waits so. So this core needs ROM 920417 or later, as any built from `development`
   does. It is what `jtagboot.py` had met and got round by setting the timer, taken then for
-  something only a JTAG boot does. With a newer ROM the flashed core has not been started yet.
+  something only a JTAG boot does. With ROM 920423 on the card (as `MEGA651.ROM`, `1` held
+  at the start) the flashed core starts into BASIC and the engine answers with its ID and
+  version. The test program and the player have not been run again on that ROM.
 - No emulator support yet.
 
 ## Where it is

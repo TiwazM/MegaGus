@@ -64,8 +64,9 @@ the 0.97 core as well, name the new one `MEGA651.ROM` and hold `1` while the MEG
 MEGA65 on with NO SCROLL held down, and in the core menu hold CTRL and press the number of
 the slot to put it in. Use one from 2 to 7: slot 0 is the factory core, and slot 1 is where
 the MEGA65 falls back to, so both are best left as they are. Then choose the slot to start
-the core. The MEGA65 User's Guide describes the menu. (The core file was made and checked with
-mega65-tools' `coretool`; the testing so far was all with the bitstream over JTAG.)
+the core. The MEGA65 User's Guide describes the menu. (Flashed so into an R6, the core
+starts into BASIC with ROM 920423; the tests named in the docs were made with the same
+bitstream over JTAG.)
 
 **Over JTAG, without flashing.** With a JTAG adapter and MEGA65 Studio's `m65rs`:
 

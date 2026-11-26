@@ -34,8 +34,8 @@ These are beyond what `LDA $nnnn` reaches, so each language has its own way:
 
 - **BASIC 65**: `POKE`, `PEEK` and `WPOKE` (two bytes at once) take the full address:
   `POKE $EFFF001,128`.
-- **C (cc65 with mega65-libc)**: `lpoke(address, value)`, `lpeek(address)`, and
-  `lcopy(from, to, count)` for many bytes at once, from `memory.h`.
+- **C (llvm-mos or cc65, with mega65-libc)**: `lpoke(address, value)`, `lpeek(address)`,
+  and `lcopy(from, to, count)` for many bytes at once, from `memory.h`.
 - **Assembly**: a 32-bit pointer in the zero page and `LDA [ptr],Z` / `STA [ptr],Z`; the
   DMA for blocks, with `$E0` as the megabyte.
 
@@ -252,27 +252,31 @@ built for the R6 board).
 |--------------|---------------------|-----------------------------------------------------|
 | `chord.bas`  | BASIC 65            | computes a sine and plays a chord on three voices   |
 | `sample.bas` | BASIC 65            | loads a sample from disk and plays it on a key      |
-| `tune.c`     | C (cc65, C64 mode)  | a short tune on three voices, timed by the engine   |
+| `tune.c`     | C (llvm-mos)        | a short tune on three voices, timed by the engine   |
 | `tone.asm`   | assembly (ACME)     | a tone, with a DMA copy and a 32-bit pointer        |
 
 `kick.raw` is a drum for `sample.bas`. Build lines for the C and the assembly are at the
 top of each file; the BASIC listings are plain text, to type in, to paste into a transfer
-tool, or to turn into program files with a tokenizer.
+tool, or to turn into program files with a tokenizer. All four are for MEGA65 mode. The C
+example is built with llvm-mos and `src/utilities/megagus/mega65.ld`, a plan of memory for
+a C program that starts with `RUN`, prints through the KERNAL and ends back in BASIC
+([more](megagus.md#in-mega65-mode)).
 
 **On a disk.** The release has all four, with the drum and the
 [test program](megagus.md#test-program), as `MEGAGUS.D81` (`makedisk.py` makes it). Mount
 it, and
 
-| To run     | In          | Type                                           |
-|------------|-------------|------------------------------------------------|
-| the chord  | MEGA65 mode | `DLOAD "CHORD"` and `RUN`                      |
-| the sample | MEGA65 mode | `DLOAD "SAMPLE"` and `RUN`                     |
-| the tone   | MEGA65 mode | `DLOAD "TONE"` and `RUN`                       |
-| the tune   | C64 mode    | `GO64`, then `LOAD "TUNE",8` and `RUN`         |
-| the tests  | C64 mode    | `GO64`, then `LOAD "MEGAGUSTEST",8` and `RUN`  |
+| To run     | Type                                |
+|------------|-------------------------------------|
+| the chord  | `DLOAD "CHORD"` and `RUN`           |
+| the sample | `DLOAD "SAMPLE"` and `RUN`          |
+| the tone   | `DLOAD "TONE"` and `RUN`            |
+| the tune   | `DLOAD "TUNE"` and `RUN`            |
+| the tests  | `DLOAD "MEGAGUSTEST"` and `RUN`     |
 
-All four were run from that disk on a MEGA65 R6 with the core of release 1.0 (2026-11-26)
-and recorded over HDMI: the chord is its three notes (261.7, 329.7 and 392 Hz, the lowest
+All four were run from a disk like it on a MEGA65 R6 with the core of release 1.0
+(2026-11-26; the tune as a C64-mode program then, and again as it is now) and recorded
+over HDMI: the chord is its three notes (261.7, 329.7 and 392 Hz, the lowest
 on the left and the highest on the right), the tone 440 Hz, the drum plays at each press of
 SPACE (and the sample RAM begins with `kick.raw`'s bytes after the `BLOAD`), and the tune
 plays its two seconds and says `done`.

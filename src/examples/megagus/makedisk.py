@@ -5,17 +5,17 @@ disk image, ready to mount on a MEGA65.
 
   ./makedisk.py [OUT.d81]
 
-It wants the programs built first (the lines are at the top of tune.c and tone.asm, and
-`make src/tests/megagus/megagustest.prg` for the test program) and the two BASIC listings
-as program files, chord.prg and sample.prg: any BASIC 65 tokenizer makes those, MEGA65
-Studio's with `m65rs basic tokenize chord.bas`.
+It wants the programs built first (`make src/examples/megagus/tune.prg` and
+`make src/tests/megagus/megagustest.prg`, with llvm-mos; the line for tone.prg is at the
+top of tone.asm) and the two BASIC listings as program files, chord.prg and sample.prg:
+any BASIC 65 tokenizer makes those, MEGA65 Studio's with `m65rs basic tokenize chord.bas`.
 
-On the disk:
-  CHORD, SAMPLE   BASIC 65: in MEGA65 mode DLOAD "CHORD" and RUN
+On the disk, all for MEGA65 mode (DLOAD "NAME" and RUN):
+  CHORD, SAMPLE   BASIC 65
   KICK.RAW        the drum SAMPLE loads
-  TONE            assembly: in MEGA65 mode DLOAD "TONE" and RUN
-  TUNE            C: in C64 mode (GO64) LOAD "TUNE",8 and RUN
-  MEGAGUSTEST     the test program: in C64 mode LOAD "MEGAGUSTEST",8 and RUN
+  TONE            assembly
+  TUNE            C
+  MEGAGUSTEST     the test program
 """
 import os
 import sys

@@ -1,6 +1,7 @@
 work/
 __pycache__/
 *.prg
+*.elf
 *.map
 *.o
 MODPLAY.OV?

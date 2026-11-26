@@ -1,10 +1,11 @@
 /*
  * MegaGus from C: a short tune on three voices, with a sample made here.
  *
- *   cl65 --config ../../tests/vicii.cfg -O -I ../../mega65-libc/cc65/include -o tune.prg \
- *        tune.c ../../mega65-libc/cc65/src/memory.c ../../mega65-libc/cc65/src/memory_asm.s
+ *   mos-mega65-clang -Os -mlto-zp=0 -T ../../utilities/megagus/mega65.ld \
+ *       -I ../../mega65-libc/clang/include -o tune.prg tune.c ../../mega65-libc/clang/src/memory.c
  *
- * A C64-mode program (GO64, then load and RUN it). docs/megagus-programming.md goes through it.
+ * A MEGA65-mode program, built with llvm-mos: DLOAD "TUNE" and RUN.
+ * docs/megagus-programming.md goes through it.
  */
 #include <stdio.h>
 #include <memory.h>
@@ -103,8 +104,7 @@ int main(void)
   static unsigned char wave[64];
   unsigned char i, v, step;
 
-  if (lpeek(MG_GLOBAL) != 0x4D || lpeek(MG_GLOBAL + 1) != 0x47) { /* "MG"; not as 'M', 'G': cc65
-                                                                    makes those PETSCII */
+  if (lpeek(MG_GLOBAL) != 0x4D || lpeek(MG_GLOBAL + 1) != 0x47) { /* "MG" */
     printf("no megagus in this core\n");
     return 1;
   }

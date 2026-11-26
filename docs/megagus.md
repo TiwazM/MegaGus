@@ -96,6 +96,15 @@ What it keeps is the idea; what it changes:
   list, the folders, the four screens, pause, the position keys, leaving and a second `RUN`
   work there. Heard by a capture card. How long a tick takes the real CPU was not measured:
   the songs keep their time over 44 seconds.
+- The programs are MEGA65-mode programs now: `DLOAD`, `RUN`, no `GO64` (2026-11-26). The
+  test program, the C example and the player were C64-mode programs as cc65 builds them;
+  they are built with llvm-mos instead ([how](#in-mega65-mode)), the player as a program
+  and one file of overlays. On the R6 with the core of release 1.0, from the two disk
+  images: the test program's 12 tests pass and its sounds play, the tune plays, and the
+  player plays ZEN.S3M, `clown.xm` (1 066 KB, 6 samples made smaller) and ROYAL.MOD as the
+  model does (`hwcompare.py`: 0.943, 0.987 and 0.998); the list, a folder, the screens,
+  leaving to BASIC, a BASIC command there and a second `RUN` work. The player's self-test
+  on this computer passes as before: the shared code is the same.
 - A stopped voice fades the last value it put out, and nothing written to it meanwhile is
   heard (2026-11-26, VERSION 3; [why](#voice-registers)). The VHDL and the model agree on
   it, the R6 core builds and meets timing (worst slack 0.048 ns), and on the R6 the test
@@ -309,17 +318,41 @@ PAN is linear, so a voice in the centre is at half level on each side.
 [Programming MegaGus](megagus-programming.md) goes from an empty program to notes, loops,
 fades and timing, in BASIC 65, C and assembly, with examples in `src/examples/megagus/`.
 
+## In MEGA65 mode
+
+The C programs here (the test program, the player, the C example) are MEGA65-mode programs:
+they load to `$2001` with a line of BASIC 65 in front, so `DLOAD` and `RUN` start them, and
+they end back in BASIC. They are built with [llvm-mos](https://github.com/llvm-mos/llvm-mos-sdk)
+(`mos-mega65-clang`; release v23.4.0 was used), not with the SDK's own plan of memory for the
+MEGA65 but with one of two here:
+
+- `mega65.ld`, for a program that lives beside the ROM: RAM from `$2001` to `$BFFF`, the
+  KERNAL and the interrupts left as they are, so `printf` and the keyboard work through the
+  KERNAL. Of the zero page the compiler takes `$02`-`$21` only (`-mlto-zp=0`), which BASIC
+  gets back at the end. (The SDK's own plan switches the ROM off at `$C000`; with ROM
+  920413 the first interrupt after that never returns, since its handler is there.)
+- `modplay.ld`, for the player, which takes the whole machine ([below](#module-player)).
+
+What an optimizing compiler has to be told on this machine: a register is `volatile`, and
+so is a DMA list; and around a DMA job it is told that any memory may have been read and
+written (an empty `__asm__` with a "memory" clobber), or it drops a store the DMA was meant
+to read, or goes on with a value the DMA has since replaced. The Hypervisor leaves Z as it
+pleases, and compiled code expects 0 there: the trap's wrapper sets it.
+
+They were C64-mode programs at first, as cc65 builds them (`GO64`, then `LOAD` and `RUN`),
+until 2026-11-26.
+
 ## Test program
 
 `src/tests/megagus/megagustest.prg` checks the engine on a real MEGA65 and then plays things
 to listen to. Build it with
 
-    make USE_LOCAL_CC65=1 src/tests/megagus/megagustest.prg
+    make LLVM_MOS=~/llvm-mos src/tests/megagus/megagustest.prg
 
-(or without `USE_LOCAL_CC65=1`, with the cc65 in the tree). It is a C64-mode program: with
-the MegaGus core running, `GO64`, load it and `RUN`, or with the m65 tool
-`m65 -4 -r src/tests/megagus/megagustest.prg`, or with MEGA65 Studio's `m65rs go64` and
-`m65rs prg -r src/tests/megagus/megagustest.prg`.
+(`LLVM_MOS`: where the [llvm-mos SDK](https://github.com/llvm-mos/llvm-mos-sdk) is; not
+needed when its `bin` is in the PATH). It is a MEGA65-mode program: with the MegaGus core
+running, `DLOAD "MEGAGUSTEST"` from the release's `MEGAGUS.D81` and `RUN`, or send it with
+MEGA65 Studio's `m65rs prg -r src/tests/megagus/megagustest.prg`.
 
 To try the core without flashing it, `src/tests/megagus/jtagboot.py` loads `bin/mega65r6.bit`
 over JTAG with `m65rs` and keeps it running. `m65rs jtag bit` alone is not enough: the core
@@ -351,8 +384,7 @@ Then, after a key, nine things to hear, each announced on the screen: a 440 Hz t
 middle, left, right, moving from left to right, fading out and in, a scale, the tone from a
 16-bit sample, four drum hits left and right, and a chord on all 32 voices (C major spread
 over four octaves, each note four times). None of them should click, crackle or distort.
-Afterwards any key but `Q` plays them again. (Typing `RUN` again does not work, as with any
-cc65 program of this kind: load it again instead.)
+Afterwards any key but `Q` plays them again, and `Q` ends in BASIC.
 
 What it should sound like is in `src/tests/megagus/work/megagustest.wav` after
 
@@ -370,15 +402,14 @@ test on the attic RAM instead.
 `src/utilities/megagus/modplay.prg` plays ProTracker-style modules, Scream Tracker 3
 modules (S3M) and FastTracker 2 modules (XM) from the SD card:
 
-    make USE_LOCAL_CC65=1 src/utilities/megagus/MODPLAY.D81
+    make LLVM_MOS=~/llvm-mos src/utilities/megagus/MODPLAY.D81
 
-That makes the program (`modplay.prg`), its four overlays (`MODPLAY.OV1` to `MODPLAY.OV4`)
-and a disk image with the five on it (51 KB, 208 of its 3160 blocks). Put `MODPLAY.D81` on
-the SD card, mount it, and in C64 mode `LOAD"*",8` and `RUN`. Or put the five files
-themselves into one directory of the SD card and load the program as the test program is
-loaded. When it starts it looks for its overlays on the disk in the drive it came from,
-then in the SD card's directory, and says so if one is missing or is another build's.
-After ESC in the list, `RUN` starts it again.
+That makes the program (`modplay.prg`, 16 KB), the file of its overlays (`MODPLAY.OVL`,
+37 KB) and a disk image with the two on it (213 of its 3160 blocks). Put `MODPLAY.D81` on
+the SD card, mount it, and `RUN"*"` (or `DLOAD "MODPLAY"` and `RUN`). It is a MEGA65-mode
+program. Its first line is BASIC and loads the overlays from the same disk before the
+program starts; without that file BASIC says `FILE NOT FOUND`. ESC in the list ends it,
+back in BASIC with the screen as it was, and `RUN` starts it again.
 
 The modules are not read from a disk image (some are bigger than one): they are files on
 the SD card itself.
@@ -425,20 +456,27 @@ POS at the sample's beginning. An S3M's rows are packed, each as long as what is
 player notes where each row of the playing pattern began as it comes to it, and for a jump
 into rows it has not seen it reads its way there.
 
-**In parts.** With XM the program came to some 60 KB, and a C64-mode program has 50. So it
-is a main part and four overlays, which take turns in two places in memory
-(`modplay.cfg` is the plan of it): the file list or the playing screens in one, the player
-of a MOD and an S3M or that of an XM in the other. All four are read once, when the program
-starts (with the KERNAL from the disk it was loaded from, or else with the Hypervisor from
-the SD card's directory), and kept in the MEGA65's bank 5: putting one in place is then a
-copy of a few kilobytes, and a change of folder does not lose them. Each is a program file
-with the number of its build after its load address, and the program does not take another
-build's.
+**In parts.** All of it is 66 KB of code and variables, and a MEGA65-mode program has 40
+to 52 KB, depending on how much of the ROM it does without. So it is a main part and four
+overlays, which take turns in two places in memory (`modplay.ld` is the plan of it): the
+file list or the playing screens in one, the player of a MOD and an S3M or that of an XM in
+the other. The overlays are linked with the program and then cut out of it into one file,
+`MODPLAY.OVL`. The program file begins with a line of BASIC,
+`10 BLOAD"MODPLAY.OVL",B5,P0:BANK0:SYS8231`: BASIC itself loads that file to the start of
+the MEGA65's bank 5 and then starts the program. Putting an overlay in place is a DMA copy
+of a few kilobytes from there.
 
-cc65's own plan for a C64 program puts the variables where its start-up code is, so the
-code is gone once the program runs and a second `RUN` ends in BASIC's `READY.` on a cleared
-screen (the processor meets a zero, a BRK). `modplay.cfg` puts the variables after those 38
-bytes instead. The three variables that begin with a value keep the one they had.
+**The machine while it runs.** The player takes the whole machine from its start to its
+end and gives it back as it was. It runs with the interrupts off: it has its own screen,
+reads the keyboard's queue (`$D610`) itself, and reads files through the Hypervisor, so it
+needs nothing of the KERNAL, which would otherwise take the keys first. With the KERNAL
+idle its memory is free: the program switches the ROM off at `$C000` (the VIC's `$D030`)
+and at `$E000` (the MAP, and the processor's port at `$01`, which after a load from disk
+would show the C64's KERNAL there), and has RAM from `$2001` to `$CFFF` and from `$E000` to
+`$FFF9`, 52 KB. The RESTORE key's vector points at a return. BASIC's zero page is saved at
+the start and put back at the end, with the mapping, the port, the VIC's registers for
+where the screen is, and the colours of BASIC's screen (kept in bank 5 meanwhile). BASIC's
+own screen memory is not touched: the VIC-IV is pointed at bank 4 while the program runs.
 
 The screen is the VIC-IV's 80 columns with its memory in bank 4, written a row at a time
 with the DMA. While a module plays, one row of a screen is drawn between two looks at the
@@ -617,14 +655,15 @@ with `-DKEYS=...` it presses those keys by itself and then tells Xemu to stop, w
 picture of the screen (Xemu's `-headless -testing -screenshot`, and `-hdosvirt` to give it
 a folder of this computer as the SD card). The file list, a folder, and the playing screens
 for a MOD, an S3M and an XM were looked at that way, and an 862 KB XM whose samples had to
-be made smaller. The overlays are read and put in place there as on the machine, from the
-SD card's directory and from a disk image (`maked81.py`'s, started with `LOAD"*",8`). Xemu also
-has the MEGA65's multiplier (`$D770`), which the player uses for an XM's levels after
-trying it once: it gave the right product. With `-DRERUN` as well, the program types `RUN`
-for BASIC when it is left, once: that it starts a second time is seen there too, and with
-cc65's own plan of memory it does not.
+be made smaller. Xemu also has the MEGA65's multiplier (`$D770`), which the player uses for
+an XM's levels after trying it once: it gave the right product. (All that was with the
+C64-mode build.) The MEGA65-mode build was run there from `maked81.py`'s disk image
+(`-8 MODPLAY.D81 -autoload`), with Xemu's monitor port open (`-uartmon`) for `m65rs` to read
+the screen and the processor through: BASIC's line loads the overlays, the list comes, an
+XM plays through its screens, ESC ends in BASIC with its screen as it was, a BASIC command
+works there and `RUN` starts the program again.
 
-A tick was timed there as well (`-DTICKTIME`: by the CIA's timer, with the raster agreeing):
+A tick was timed there as well, in the C64-mode build (`-DTICKTIME`: by the CIA's timer, with the raster agreeing):
 3.5 ms on average and 7 ms at most for an XM of 20 channels, 1.2 and 2.6 ms for one of 16,
 0.7 ms for a MOD of 6 channels (8 ms where every channel has a note: finding a note's place
 among the periods is slow). Ticks are 15 to 20 ms apart. Xemu's clock is not the real
@@ -829,8 +868,11 @@ hurry through the ticks it missed.
 | `src/tests/megagus/megagustest.c`       | The test program for the MEGA65                   |
 | `src/tests/megagus/megagustest_host.py` | The same program on this computer, with the model |
 | `src/utilities/megagus/modplay.c`       | The module player (MOD, S3M and XM)               |
-| `src/utilities/megagus/modplay.cfg`     | Its plan of memory: the program and its overlays  |
+| `src/utilities/megagus/modplay.ld`      | Its plan of memory: the program and its overlays  |
+| `src/utilities/megagus/modplay65.s`     | Its BASIC line, the Hypervisor's trap, the MAP    |
+| `src/utilities/megagus/makeovl.sh`      | The overlays out of the linked program: one file  |
 | `src/utilities/megagus/maked81.py`      | The program and its overlays on one disk image    |
+| `src/utilities/megagus/mega65.ld`       | Plan of memory for the other MEGA65-mode programs |
 | `src/utilities/megagus/modplay_host.py` | The player on this computer, and its self-test    |
 | `src/utilities/megagus/makemod.py`      | The test MODs and a tune of its own               |
 | `src/utilities/megagus/makes3m.py`      | The test S3Ms, one too big for the sample RAM     |

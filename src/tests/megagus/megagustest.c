@@ -4,9 +4,9 @@
   Finds the engine, tests its sample RAM and its registers, checks how voices run, loop,
   end and are timed, then plays a few things to listen to. See docs/megagus.md.
 
-  Built with cc65 it is a C64-mode program (load to $0801, RUN): it switches the CPU to
-  40 MHz and reaches MegaGus with the DMA. It can't be RUN a second time (cc65's start-up
-  code is in memory its variables then use): it plays its sounds again itself, on a key. Built with a host compiler it speaks a line
+  Built with llvm-mos (mos-mega65-clang and ../../utilities/megagus/mega65.ld) it is a
+  MEGA65-mode program: DLOAD it and RUN. It reaches MegaGus with the DMA, writes with the
+  KERNAL, and ends back in BASIC. Built with a host compiler it speaks a line
   protocol on stdin/stdout, which megagustest_host.py answers from the engine's model: the
   same tests, run before anything is on hardware.
 
@@ -93,12 +93,12 @@ static unsigned char buf2[256];
 /* ------------------------------------------------------------------------------------------
    The machine: far memory, video frames, the screen
    ------------------------------------------------------------------------------------------ */
-#ifdef __CC65__
+#ifdef __MEGA65__
 
-#include <conio.h>
+#include <cbm.h>
 
-#define POKE(a, v) (*(unsigned char *)(a) = (v))
-#define PEEK(a) (*(unsigned char *)(a))
+#define POKE(a, v) (*(volatile unsigned char *)(a) = (v))
+#define PEEK(a) (*(volatile unsigned char *)(a))
 #define say printf
 
 /* An enhanced DMA list: F018B format, source and destination megabyte, then the job */
@@ -119,15 +119,20 @@ struct dmalist {
   unsigned int modulo;
 };
 
-static struct dmalist dl = { 0x0B, 0x80, 0, 0x81, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0 };
-static unsigned char dbyte;
+/* The DMA reads the list and reads and writes the program's memory behind the compiler's
+   back: the list is volatile, and around the job the compiler is told that all memory may
+   have been read and written, so that it neither drops a store nor keeps a stale value. */
+static volatile struct dmalist dl = { 0x0B, 0x80, 0, 0x81, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0 };
+static volatile unsigned char dbyte;
 
 static void dma(void)
 {
+  __asm__ volatile("" ::: "memory");
   POKE(0xD702U, 0);
   POKE(0xD704U, 0);
   POKE(0xD701U, (unsigned char)((unsigned int)&dl >> 8));
   POKE(0xD705U, (unsigned char)((unsigned int)&dl & 0xFF)); /* enhanced list: go */
+  __asm__ volatile("" ::: "memory");
 }
 
 static void far_src(unsigned long a)
@@ -200,18 +205,21 @@ static unsigned char video_fps(void)
   return (PEEK(0xD06FU) & 0x80) ? 60 : 50;
 }
 
+/* A key, as the KERNAL has it (PETSCII): what was typed before does not count */
 static unsigned char wait_key(void)
 {
-  while (kbhit())
-    cgetc();
-  return (unsigned char)cgetc();
+  unsigned char k;
+  while (cbm_k_getin())
+    ;
+  while ((k = cbm_k_getin()) == 0)
+    ;
+  return k;
 }
 
 static void setup(void)
 {
   POKE(0xD02FU, 0x47); /* MEGA65 registers on */
   POKE(0xD02FU, 0x53);
-  POKE(0x0000U, 65); /* 40 MHz */
 }
 
 #else /* the host: megagustest_host.py is the MEGA65 */
@@ -373,9 +381,12 @@ static unsigned char failures;
 
 static void test(const char *name)
 {
+  unsigned char n;
   ++tests;
   failures = 0;
-  say("%-26s", name);
+  say("%s", name);
+  for (n = (unsigned char)strlen(name); n < 26; n++) /* not %-26s: not every printf has it */
+    say(" ");
 }
 
 static void fail_header(void)
@@ -825,7 +836,7 @@ int main(void)
   do {
     listen();
     say("\ndone: q ends, another key plays\nthe sounds again\n");
-  } while (wait_key() != 'q');
+  } while ((wait_key() | 0x20) != 0x71); /* Q, in ASCII or PETSCII */
   return failed_tests ? 1 : 0;
 #endif
 }

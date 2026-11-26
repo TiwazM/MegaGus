@@ -14,15 +14,13 @@
   version 1 has none: there voice 31 plays nothing and is the clock (its position moves one
   byte an output frame), and a module can have 31 channels, not 32.
 
-  Built with cc65 for the MEGA65 it is a C64-mode program in parts, since all of it is more
-  than fits at once (modplay.cfg): a main part and four overlays (MODPLAY.OV1 to MODPLAY.OV4),
-  which it reads when it starts, from the disk it was loaded from (maked81.py puts the five
-  on a D81) or from the SD card's directory, and puts in place as it needs them. They are the list of
-  the SD card's modules, the screens while one plays, the player of a MOD and an S3M, and the
-  player of an XM. Built with a host compiler, or with cc65 for its simulator (-t sim6502),
-  it is one program that plays the file named on its command line once through, speaking
-  megagustest's line protocol on stdin/stdout: modplay_host.py answers that from the
-  engine's model and writes what it plays to a WAV file.
+  Built with llvm-mos for the MEGA65 (mos-mega65-clang and mega65.ld) it is a MEGA65-mode
+  program: DLOAD it and RUN. It has its own screen and reads the keyboard and the SD card's
+  files itself, with the interrupts off, and gives the machine back to BASIC as it found it.
+  Built with a host compiler, or with cc65 for its simulator (-t sim6502), it is a program
+  that plays the file named on its command line once through, speaking megagustest's line
+  protocol on stdin/stdout: modplay_host.py answers that from the engine's model and writes
+  what it plays to a WAV file.
 
   Not done in a MOD: the E0 (filter), E3 (glissando) and EF (invert loop) commands, the swap
   of a sample without a new note, 15-sample modules. In an S3M: AdLib instruments, stereo
@@ -37,7 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__CC65__) && !defined(__SIM6502__)
+#ifdef __MEGA65__
 #define ON_MEGA65
 #endif
 
@@ -46,34 +44,6 @@ typedef unsigned short u16; /* 16 bits here and on the host */
 typedef short s16;
 typedef signed char s8;
 typedef unsigned long u32; /* at least 32 */
-
-#ifdef ON_MEGA65
-/* this file's texts as the screen has them, upper and lower case */
-#include <cbm_screen_charmap.h>
-#pragma charmap (0x00, 0x00) /* but a text still ends with a zero */
-#ifndef STAMP
-#define STAMP 1 /* the build: the overlays of another are not taken */
-#endif
-/* Each overlay's first four bytes (modplay.cfg puts these segments first): the address the
-   rest of the file loads to, as a program file on a disk begins, and the build's number */
-extern u8 _OVL1_START__[], _OVL2_START__[], _OVL3_START__[], _OVL4_START__[];
-#pragma rodata-name (push, "OVL1HEAD")
-const u8 *const ov1_addr = _OVL1_START__ + 2;
-const u16 ov1_stamp = STAMP;
-#pragma rodata-name (pop)
-#pragma rodata-name (push, "OVL2HEAD")
-const u8 *const ov2_addr = _OVL2_START__ + 2;
-const u16 ov2_stamp = STAMP;
-#pragma rodata-name (pop)
-#pragma rodata-name (push, "OVL3HEAD")
-const u8 *const ov3_addr = _OVL3_START__ + 2;
-const u16 ov3_stamp = STAMP;
-#pragma rodata-name (pop)
-#pragma rodata-name (push, "OVL4HEAD")
-const u8 *const ov4_addr = _OVL4_START__ + 2;
-const u16 ov4_stamp = STAMP;
-#pragma rodata-name (pop)
-#endif
 
 /* MegaGus */
 #define MG_RAM 0xE000000UL
@@ -110,34 +80,17 @@ const u16 ov4_stamp = STAMP;
 /* ------------------------------------------------------------------------------------------
    The machine: far memory, the file, the screen
    ------------------------------------------------------------------------------------------ */
-static u8 sector[512];
+#ifdef __MEGA65__
+#define HIGH __attribute__((section("high"))) /* in the memory at $F400 (modplay.ld) */
+#else
+#define HIGH
+#endif
+static u8 sector[512] HIGH;
 
 #ifdef ON_MEGA65
 
-#include <conio.h>
-
-#define POKE(a, v) (*(unsigned char *)(a) = (v))
-#define PEEK(a) (*(unsigned char *)(a))
-
-/* mega65-libc's fileio.s and dirent.s: the Hypervisor's files */
-struct m65_dirent {
-  unsigned long d_ino;
-  unsigned short d_off;
-  unsigned long d_reclen; /* the file's length */
-  unsigned short d_type;  /* its FAT attributes */
-  char d_name[256];
-};
-/* cc65's: the KERNAL's LOAD, to an address; returns the bytes it loaded */
-unsigned int __fastcall__ cbm_load(const char *name, unsigned char device, void *data);
-
-void closeall(void);
-unsigned char chdir(char *filename);
-unsigned char open(char *filename);
-void close(unsigned char fd);
-unsigned short read512(unsigned char *buffer);
-unsigned char opendir(void);
-struct m65_dirent *readdir(unsigned char);
-void closedir(unsigned char);
+#define POKE(a, v) (*(volatile unsigned char *)(a) = (v))
+#define PEEK(a) (*(volatile unsigned char *)(a))
 
 /* An enhanced DMA list: F018B format, source and destination megabyte, then the job */
 struct dmalist {
@@ -157,15 +110,20 @@ struct dmalist {
   unsigned int modulo;
 };
 
-static struct dmalist dl = { 0x0B, 0x80, 0, 0x81, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0 };
-static unsigned char dbyte;
+/* The DMA reads the list and reads and writes the program's memory behind the compiler's
+   back: the list is volatile, and around the job the compiler is told that all memory may
+   have been read and written, so that it neither drops a store nor keeps a stale value. */
+static volatile struct dmalist dl = { 0x0B, 0x80, 0, 0x81, 0, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0 };
+static volatile unsigned char dbyte;
 
 static void dma(void)
 {
+  __asm__ volatile("" ::: "memory");
   POKE(0xD702U, 0);
   POKE(0xD704U, 0);
   POKE(0xD701U, (unsigned char)((unsigned int)&dl >> 8));
   POKE(0xD705U, (unsigned char)((unsigned int)&dl & 0xFF)); /* enhanced list: go */
+  __asm__ volatile("" ::: "memory");
 }
 
 static void far_src(unsigned long a)
@@ -221,7 +179,7 @@ static u8 fake(u32 a, u8 *v)
 static u8 mg_peek(u32 a)
 {
 #ifdef NOGUS
-  if (fake(a, &dbyte))
+  if (fake(a, (u8 *)&dbyte))
     return dbyte;
 #endif
   far_src(a);
@@ -270,6 +228,86 @@ static void mg_get(u8 *dst, u32 src, u16 n)
   dl.dst = (unsigned int)dst;
   dl.count = n;
   dma();
+}
+
+static void mg_copy(u32 dst, u32 src, u16 n)
+{
+  far_src(src);
+  far_dst(dst);
+  dl.count = n;
+  dma();
+}
+
+/* The Hypervisor's files on the SD card (hyppo.s has the trap). A name goes to the foot of
+   the stack's page for it; a directory entry comes back in a page of its own: the name (64
+   bytes), its length, the short name (13), the first cluster (4), the length (4), the FAT
+   attributes. */
+extern volatile u8 hy_a, hy_x, hy_y;
+volatile u8 hy_a, hy_x, hy_y;
+u8 hyppo(u8 function, u8 x, u8 y);
+
+static u8 dirent[256] __attribute__((section("lowpage"), aligned(256))); /* first of the variables */
+#define D_NAMELEN 64
+#define D_LENGTH 82
+#define D_ATTR 86
+
+static u8 f_name(const char *name)
+{
+  u8 i = 0;
+  do
+    POKE(0x0100U + i, (u8)name[i]);
+  while (name[i++]);
+  return hyppo(0x2E, 0x00, 0x01);
+}
+
+static void f_closeall(void)
+{
+  hyppo(0x22, 0, 0);
+}
+
+/* the file's number, or 0xFF: there is none of that name */
+static u8 f_open(const char *name)
+{
+  if (!f_name(name) || !hyppo(0x34, 0, 0))
+    return 0xFF;
+  hyppo(0x18, 0, 0);
+  return hy_a;
+}
+
+static void f_close(u8 fd)
+{
+  hyppo(0x20, fd, 0);
+}
+
+/* the open file's next 512 bytes */
+static void f_read512(u8 *to)
+{
+  hyppo(0x1A, 0, 0);
+  POKE(0xD689U, (u8)(PEEK(0xD689U) | 0x80)); /* the SD card's sector buffer, not the floppy's */
+  mg_get(to, 0xFFD6E00UL, 512);
+}
+
+static void f_chdir(const char *name)
+{
+  if (f_name(name) && hyppo(0x34, 0, 0))
+    hyppo(0x0C, 0, 0);
+}
+
+static u8 d_open(void)
+{
+  hyppo(0x12, 0, 0);
+  return hy_a;
+}
+
+/* the next entry into dirent[]: 0 when there are no more */
+static u8 d_read(u8 d)
+{
+  return hyppo(0x14, d, (u8)((unsigned int)dirent >> 8));
+}
+
+static void d_close(u8 d)
+{
+  hyppo(0x16, d, 0);
 }
 
 #else /* the host: modplay_host.py is the MEGA65 */
@@ -332,7 +370,7 @@ static void wr(u16 r, u8 v)
 /* ------------------------------------------------------------------------------------------
    The module
    ------------------------------------------------------------------------------------------ */
-static u8 hdr[1084];
+static u8 hdr[1084] HIGH;
 #define F_MOD 0
 #define F_S3M 1
 #define F_XM 2
@@ -390,8 +428,7 @@ static u8 digit(u8 c)
 }
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY3")
-#pragma rodata-name (push, "OVERLAY3")
+#pragma clang section text="ovl3.text" rodata="ovl3.rodata"
 #endif
 /* A MOD's header in hdr[]: 0 if this is a module that can be played, else why not */
 static const char *parse_mod(void)
@@ -460,8 +497,7 @@ static const char *parse_mod(void)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 /* ------------------------------------------------------------------------------------------
@@ -490,8 +526,7 @@ static u32 get32(const u8 *p)
 }
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY3")
-#pragma rodata-name (push, "OVERLAY3")
+#pragma clang section text="ovl3.text" rodata="ovl3.rodata"
 #endif
 /* The file's bytes in order, from wherever: for going through the packed patterns */
 static u32 by_at;
@@ -672,8 +707,7 @@ static const char *parse_s3m(void)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 /* ------------------------------------------------------------------------------------------
@@ -694,8 +728,7 @@ static u8 xm_speed, xm_tempo;
 static u8 regs[16];
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY4")
-#pragma rodata-name (push, "OVERLAY4")
+#pragma clang section text="ovl4.text" rodata="ovl4.rodata"
 #endif
 static void put32(u8 *p, u32 v)
 {
@@ -830,16 +863,14 @@ static const char *parse_xm(void)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 /* ------------------------------------------------------------------------------------------
    The samples into the sample RAM
    ------------------------------------------------------------------------------------------ */
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY1")
-#pragma rodata-name (push, "OVERLAY1")
+#pragma clang section text="ovl1.text" rodata="ovl1.rodata"
 #endif
 /* The bytes a sample takes there */
 static u32 stored(u8 i)
@@ -1020,8 +1051,7 @@ static const char *put_samples(void)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 /* The file is in the attic RAM, filesize bytes of it: get it ready to play. 0, or why not. */
@@ -1223,8 +1253,7 @@ static u16 note_period(u8 note, u8 ft)
 }
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY3")
-#pragma rodata-name (push, "OVERLAY3")
+#pragma clang section text="ovl3.text" rodata="ovl3.rodata"
 #endif
 /* The note a pattern's period means: the nearest */
 static u8 note_of(u16 period)
@@ -1250,8 +1279,7 @@ static u16 tune(u16 period, u8 ft)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 static void put24(u8 *p, u32 v)
@@ -1353,10 +1381,10 @@ static u32 mul(u32 a, u16 b)
 {
 #ifdef ON_MEGA65
   if (hw_mul) {
-    *(u32 *)0xD770U = a;
-    *(u16 *)0xD774U = b;
-    *(u16 *)0xD776U = 0;
-    return *(u32 *)0xD778U;
+    *(volatile u32 *)0xD770U = a;
+    *(volatile u16 *)0xD774U = b;
+    *(volatile u16 *)0xD776U = 0;
+    return *(volatile u32 *)0xD778U;
   }
 #endif
   return a * b;
@@ -1612,8 +1640,7 @@ static void play_at(u8 ch, u32 offs, u8 round)
 }
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY3")
-#pragma rodata-name (push, "OVERLAY3")
+#pragma clang section text="ovl3.text" rodata="ovl3.rodata"
 #endif
 static void slide_period(u8 ch, s16 by)
 {
@@ -1626,8 +1653,7 @@ static void slide_period(u8 ch, s16 by)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 static void slide_volume(u8 ch, s16 by)
@@ -1641,8 +1667,7 @@ static void slide_volume(u8 ch, s16 by)
 }
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY3")
-#pragma rodata-name (push, "OVERLAY3")
+#pragma clang section text="ovl3.text" rodata="ovl3.rodata"
 #endif
 static void volume_slide(u8 ch)
 {
@@ -1654,8 +1679,7 @@ static void volume_slide(u8 ch)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 static void tone_portamento(u8 ch)
@@ -1743,8 +1767,7 @@ static u8 jump_order, break_row, do_jump, do_break, do_loop, loop_row;
 static u8 xm_bp;
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY3")
-#pragma rodata-name (push, "OVERLAY3")
+#pragma clang section text="ovl3.text" rodata="ovl3.rodata"
 #endif
 /* A new row: its notes, and what its commands do at once */
 static void do_row(void)
@@ -2133,8 +2156,7 @@ static void s3m_volslide(u8 ch, u8 arg, u8 first, u8 fast)
 }
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 /* Qxy: the volume a retrigger leaves */
@@ -2171,8 +2193,7 @@ static void s3m_retrig_volume(u8 ch, u8 x)
 }
 
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY3")
-#pragma rodata-name (push, "OVERLAY3")
+#pragma clang section text="ovl3.text" rodata="ovl3.rodata"
 #endif
 /* A row's note, sample number and volume for a channel. Returns 1 if the sample is to start. */
 static u8 s3m_note(u8 ch, u8 porta)
@@ -2564,8 +2585,7 @@ static void ms_cells(u8 r)
 #endif
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 static void all_levels(void)
@@ -2579,8 +2599,7 @@ static void all_levels(void)
    An XM's rows and commands, as FastTracker 2 plays them
    ------------------------------------------------------------------------------------------ */
 #ifdef ON_MEGA65
-#pragma code-name (push, "OVERLAY4")
-#pragma rodata-name (push, "OVERLAY4")
+#pragma clang section text="ovl4.text" rodata="ovl4.rodata"
 #endif
 /* which of c_mem[] a command's argument is remembered in */
 #define M_UP 0
@@ -3476,8 +3495,7 @@ static void xm_cells(u8 r)
 #endif
 
 #ifdef ON_MEGA65
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#pragma clang section text="" rodata=""
 #endif
 
 static void new_pattern(void)
@@ -3735,12 +3753,13 @@ static u8 song_poll(void)
 
 /* ------------------------------------------------------------------------------------------
    The screen: the VIC-IV's 80 columns, its memory in the MEGA65's bank 4. A row is put
-   together in line[] as screen codes and copied there; this file's own texts are screen
-   codes already (cbm_screen_charmap.h, for the set with both cases), a module's are ASCII.
+   together in line[] as screen codes (of the set with both cases) and copied there; the
+   texts, this file's own and a module's, are ASCII.
    ------------------------------------------------------------------------------------------ */
 #define SCREEN 0x40000UL
 #define COLOURS 0xFF80000UL
-#define STORE 0x50000UL /* bank 5: the overlays as they were read at the start */
+#define IMAGES 0x50000UL /* bank 5: the overlays as they were loaded */
+#define KEEP 0x5C000UL   /* and the colours of BASIC's screen, for when the program ends */
 #define FILES 0x41000UL /* the directory: ENTRY bytes a file */
 #define ENTRY 72
 #define E_ATTR 64
@@ -3798,9 +3817,12 @@ static void mg_fill(u32 dst, u8 v, u16 n)
 #if defined(NOGUS) && defined(KEYS)
 /* Keys an emulator presses by itself, one every so often (cl65 -DKEYS=0x11,0x0D,...), and at
    their end Xemu is told to stop (its -testing), which is when it takes its screenshot */
+#ifndef KEYWAIT
+#define KEYWAIT 2500 /* looks at the keyboard between two keys */
+#endif
 static const u8 script[] = { KEYS, 0 };
 static u8 script_at;
-static u16 script_wait;
+static u32 script_wait;
 #endif
 
 static u8 key(void)
@@ -3809,14 +3831,10 @@ static u8 key(void)
   if (k)
     POKE(0xD610U, 0);
 #if defined(NOGUS) && defined(KEYS)
-  if (++script_wait < 2500)
+  if (++script_wait < KEYWAIT)
     return 0;
   script_wait = 0;
   k = script[script_at];
-#ifdef RERUN
-  if (k == 0x1B && PEEK(0x02A7U) == 0x55) /* the second time round: the end is here */
-    k = 0;
-#endif
   if (k == 0)
     POKE(0xD6CFU, 0x42);
   else
@@ -3859,7 +3877,7 @@ static void l_new(void)
 static void l_text(const char *s)
 {
   while (*s && lx < 80)
-    line[lx++] = (u8)*s++;
+    line[lx++] = sc((u8)*s++);
 }
 
 /* n characters of a file's text: where it ends, blanks */
@@ -3924,14 +3942,31 @@ static void say(u8 y, const char *s, u8 c)
   colour(y, 0, 80, c);
 }
 
+/* The program's own screen, and BASIC's again afterwards as it was: BASIC's characters stay
+   where they are (the VIC-IV is only pointed elsewhere), its colours are kept in bank 5. The
+   registers that say where the screen is and how wide are kept and put back one by one;
+   $D031 (40 or 80 columns) is written only where it has to change, since a write to it has
+   the VIC-IV work the others out anew. */
+static const u16 vic_regs[] = { 0xD020U, 0xD021U, 0xD058U, 0xD059U, 0xD05EU, 0xD060U, 0xD061U, 0xD062U, 0xD063U };
+#define VIC_REGS (sizeof vic_regs / sizeof vic_regs[0])
+static u8 vic_kept[VIC_REGS], d031_kept;
+
 static void screen_on(void)
 {
-  POKE(0xD018U, 0x16);                           /* both cases; before the rest, which it resets */
-  POKE(0xD031U, (u8)(PEEK(0xD031U) | 0x80));     /* 80 columns */
+  u8 i;
+  d031_kept = PEEK(0xD031U);
+  for (i = 0; i < VIC_REGS; i++)
+    vic_kept[i] = PEEK(vic_regs[i]);
+  mg_copy(KEEP, COLOURS, 2000);
+  if (!(d031_kept & 0x80))
+    POKE(0xD031U, (u8)(d031_kept | 0x80));       /* 80 columns; before the rest, which it resets */
+  POKE(0xD058U, 80);                             /* a row is 80 bytes on, and 80 characters */
+  POKE(0xD059U, 0);
+  POKE(0xD05EU, 80);
   POKE(0xD060U, 0x00);                           /* the screen's memory: $40000 */
   POKE(0xD061U, 0x00);
   POKE(0xD062U, 0x04);
-  POKE(0xD063U, (u8)(PEEK(0xD063U) & 0xF0));
+  POKE(0xD063U, (u8)(vic_kept[8] & 0xF0));
   POKE(0xD020U, BLACK);
   POKE(0xD021U, BLACK);
   mg_fill(SCREEN, 0x20, 2000);
@@ -3940,16 +3975,30 @@ static void screen_on(void)
 
 static void screen_off(void)
 {
-  POKE(0xD031U, (u8)(PEEK(0xD031U) & 0x7F));
-  POKE(0xD018U, 0x14);
-  POKE(0xD060U, 0x00);
-  POKE(0xD061U, 0x04);
-  POKE(0xD062U, 0x00);
-  POKE(0xD020U, 14);
-  POKE(0xD021U, 6);
-  memset((u8 *)0x0400U, 0x20, 1000);
-  memset((u8 *)0xD800U, 14, 1000);
-  POKE(0x00C6U, 0); /* and no keys left over for BASIC */
+  u8 i;
+  mg_copy(COLOURS, KEEP, 2000);
+  if (!(d031_kept & 0x80))
+    POKE(0xD031U, d031_kept);
+  for (i = 0; i < VIC_REGS; i++)
+    POKE(vic_regs[i], vic_kept[i]);
+}
+
+/* Until no key has come for half a second: a key still held as the program ends would be
+   typed into BASIC, and ESC there makes a command of the key after it. */
+static void keys_quiet(void)
+{
+  u8 frames = 0;
+  while (frames < 30) {
+    while (!(PEEK(0xD011U) & 0x80))
+      ;
+    while (PEEK(0xD011U) & 0x80)
+      ;
+    frames++;
+    if (PEEK(0xD610U)) {
+      POKE(0xD610U, 0);
+      frames = 0;
+    }
+  }
 }
 
 /* the row at the top, the program's and something of the screen's */
@@ -3976,107 +4025,49 @@ static void message(const char *s)
 }
 
 /* ------------------------------------------------------------------------------------------
-   The overlays: parts of the program that take turns in the same memory. Two places: one for
-   the file list or the playing screens, one for the player of the module's kind. All four are
-   read from the SD card when the program starts and kept in bank 5, so that a change of
-   directory does not lose them.
+   The overlays: parts of the program that take turns in the same memory (modplay.ld). Two
+   places: one for the file list or the playing screens, one for the player of the module's
+   kind. All four are in bank 5, one behind the other: the program's BASIC line loaded them
+   there from MODPLAY.OVL before the program started (modplay65.s).
    ------------------------------------------------------------------------------------------ */
 #define OV_FILES 1
 #define OV_SCREENS 2
 #define OV_MOD 3
 #define OV_XM 4
 
-/* where the linker has each, and how far it goes */
-extern u8 _OVL1_LAST__[], _OVL2_LAST__[], _OVL3_LAST__[], _OVL4_LAST__[];
+/* the linker's: where the two places are, how long each overlay is and where in bank 5 */
+extern u8 __ovla[], __ovlb[];
+extern u8 __ovl1_size[], __ovl2_size[], __ovl3_size[], __ovl4_size[];
+extern u8 __ovl2_image[], __ovl3_image[], __ovl4_image[];
 
 static u8 ov_in[2]; /* which is in each place */
-static char ov_name[12] = { 0x4D, 0x4F, 0x44, 0x50, 0x4C, 0x41, 0x59, 0x2E, 0x4F, 0x56, 0x31, 0 }; /* MODPLAY.OV1 */
-
-static u8 *ov_at(u8 n)
-{
-  switch (n) {
-  case 1:
-    return _OVL1_START__;
-  case 2:
-    return _OVL2_START__;
-  case 3:
-    return _OVL3_START__;
-  default:
-    return _OVL4_START__;
-  }
-}
-
-static u16 ov_size(u8 n)
-{
-  switch (n) {
-  case 1:
-    return (u16)(_OVL1_LAST__ - _OVL1_START__);
-  case 2:
-    return (u16)(_OVL2_LAST__ - _OVL2_START__);
-  case 3:
-    return (u16)(_OVL3_LAST__ - _OVL3_START__);
-  default:
-    return (u16)(_OVL4_LAST__ - _OVL4_START__);
-  }
-}
-
-/* All four into bank 5, 16 KB apart: from the disk in the drive the program came from (a
-   D81 with the five files on it), or, when the first is not there, from the SD card's
-   directory. 0, or the one that is not there or is another build's: each begins with the
-   address it loads to and then the build's number. */
-static u8 fetch_overlays(void)
-{
-  u8 n, dev, disk = 1;
-  unsigned char fd;
-  u16 left, k;
-  u32 to;
-
-  dev = PEEK(0x00BAU);
-  if (dev < 8)
-    dev = 8;
-  for (n = 1; n <= 4; n++) {
-    ov_name[10] = (char)(0x30 + n);
-    to = STORE + ((u32)(n - 1) << 14);
-    if (disk) {
-      /* the KERNAL loads it to where it runs, less the two bytes of its address */
-      k = cbm_load(ov_name, dev, ov_at(n) + 2);
-      POKE(0xD02FU, 0x47); /* the MEGA65's registers again, in case the drive's code hid them */
-      POKE(0xD02FU, 0x53);
-      if (k == ov_size(n) - 2)
-        mg_put(to, ov_at(n), ov_size(n));
-      else if (k == 0 && n == 1)
-        disk = 0;
-      else
-        return n;
-    }
-    if (!disk) {
-      closeall();
-      fd = open(ov_name);
-      if (fd == 0xFF)
-        return n;
-      for (left = ov_size(n); left; left -= k) {
-        read512(sector);
-        k = (u16)(left > 512 ? 512 : left);
-        mg_put(to, sector, k);
-        to += k;
-      }
-      close(fd);
-      to = STORE + ((u32)(n - 1) << 14);
-    }
-    mg_get(sector, to + 2, 2);
-    if (sector[0] != (u8)(STAMP & 0xFF) || sector[1] != (u8)(STAMP >> 8))
-      return n;
-  }
-  ov_in[0] = ov_in[1] = 0;
-  return 0;
-}
 
 static void need(u8 n)
 {
   u8 place = (u8)(n > 2);
+  u16 size, image;
+
   if (ov_in[place] == n)
     return;
-  mg_get(ov_at(n), STORE + ((u32)(n - 1) << 14), ov_size(n));
+  switch (n) {
+  case 1:
+    size = (u16)__ovl1_size;
+    image = 0;
+    break;
+  case 2:
+    size = (u16)__ovl2_size;
+    image = (u16)__ovl2_image;
+    break;
+  case 3:
+    size = (u16)__ovl3_size;
+    image = (u16)__ovl3_image;
+    break;
+  default:
+    size = (u16)__ovl4_size;
+    image = (u16)__ovl4_image;
+    break;
+  }
+  mg_copy((u32)(u16)(place ? __ovla : __ovlb), IMAGES + image, size);
   ov_in[place] = n;
 }
 
@@ -4108,10 +4099,11 @@ static void row_mark(void)
 }
 
 /* ------------------------------------------------------------------------------------------
-   Overlay 1: the modules on the SD card, and one of them into memory
+   The modules on the SD card, and one of them into memory
    ------------------------------------------------------------------------------------------ */
-#pragma code-name (push, "OVERLAY1")
-#pragma rodata-name (push, "OVERLAY1")
+#ifdef ON_MEGA65
+#pragma clang section text="ovl1.text" rodata="ovl1.rodata"
+#endif
 
 static u8 lower(u8 c)
 {
@@ -4145,40 +4137,36 @@ static u8 kind_of(const char *n)
 
 static void find_files(void)
 {
-  unsigned char d;
-  struct m65_dirent *e;
-  u8 attr, l, kind;
+  u8 d, attr, l, kind;
 
   nfiles = 0;
-  closeall();
-  d = opendir();
-  /* The name is taken from mega65-libc's dirent; the length and the attributes from the
-     Hypervisor's own, which readdir leaves at $0400: the library reads those two a byte too
-     early (the Hypervisor's short name is 13 bytes, not 12). */
-  while (nfiles < MAXFILES && (e = readdir(d)) != 0) {
-    attr = PEEK(0x0400U + 86);
-    l = (u8)strlen(e->d_name);
+  f_closeall();
+  d = d_open();
+  while (nfiles < MAXFILES && d_read(d)) {
+    attr = dirent[D_ATTR];
+    l = dirent[D_NAMELEN];
     if ((attr & 0x08) || l == 0 || l > 63)
       continue;
+    dirent[l] = 0;
     kind = 0;
     if (attr & 0x10) {
-      if (l == 1 && e->d_name[0] == 0x2E) /* "." */
+      if (l == 1 && dirent[0] == 0x2E) /* "." */
         continue;
     }
     else {
-      kind = kind_of(e->d_name);
+      kind = kind_of((const char *)dirent);
       if (!kind)
         continue;
     }
     memset(ent, 0, ENTRY);
-    strcpy((char *)ent, e->d_name);
+    strcpy((char *)ent, (const char *)dirent);
     ent[E_ATTR] = attr;
     ent[E_TYPE] = kind;
-    memcpy(ent + E_SIZE, (u8 *)(0x0400U + 82), 4);
+    memcpy(ent + E_SIZE, dirent + D_LENGTH, 4);
     mg_put(FILES + (u32)nfiles * ENTRY, ent, ENTRY);
     nfiles++;
   }
-  closedir(d);
+  d_close(d);
   sel = top = 0;
 }
 
@@ -4247,14 +4235,13 @@ static const char *load(void)
   filesize = get32(ent + E_SIZE);
   if (filesize > SIDE)
     return "It is bigger than the player has room for.";
-  closeall();
-  fd = open((char *)ent);
+  f_closeall();
+  fd = f_open((char *)ent);
   if (fd == 0xFF)
     return "It can't be opened.";
-  /* A sector at a time, as many as the directory says the file has: read512's count is
-     of no use (this mega65-libc loses its low byte). */
+  /* a sector at a time, as many as the directory says the file has */
   while (at < filesize) {
-    read512(sector);
+    f_read512(sector);
     got = (u16)(filesize - at > 512UL ? 512UL : filesize - at);
     mg_put(ATTIC + at, sector, got);
     at += got;
@@ -4268,7 +4255,7 @@ static const char *load(void)
       l_out(ROW_MSG);
     }
   }
-  close(fd);
+  f_close(fd);
   return open_module();
 }
 
@@ -4296,7 +4283,7 @@ static u8 browse(void)
       else if (k == K_RETURN) {
         get_entry(sel);
         if (ent[E_TYPE] == 0) { /* into the folder */
-          chdir((char *)ent);
+          f_chdir((char *)ent);
           find_files();
           say(ROW_MSG, "", LGREY);
         }
@@ -4318,14 +4305,16 @@ static u8 browse(void)
   }
 }
 
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#ifdef ON_MEGA65
+#pragma clang section text="" rodata=""
+#endif
 
 /* ------------------------------------------------------------------------------------------
-   Overlay 2: the screens while a module plays
+   The screens while a module plays
    ------------------------------------------------------------------------------------------ */
-#pragma code-name (push, "OVERLAY2")
-#pragma rodata-name (push, "OVERLAY2")
+#ifdef ON_MEGA65
+#pragma clang section text="ovl2.text" rodata="ovl2.rodata"
+#endif
 
 #define V_CHANNELS 0
 #define V_SAMPLES 1
@@ -4929,23 +4918,57 @@ static void play_song(void)
   wr(G_CONTROL, 0x80);
 }
 
-#pragma rodata-name (pop)
-#pragma code-name (pop)
+#ifdef ON_MEGA65
+#pragma clang section text="" rodata=""
+#endif
 
 /* ------------------------------------------------------------------------------------------
    The program
    ------------------------------------------------------------------------------------------ */
+/* The machine is the program's from its start to its end: the interrupts are off, so the
+   KERNAL neither takes the keys out of the keyboard's queue nor needs any memory, and the ROM
+   is switched off at $C000 and $E000, where the program has code and variables instead. The
+   ROM comes into the processor's view three ways, and each is seen to: the MAP, the VIC's
+   register $D030, and the processor's port at $01 as on a C64 (after a load from disk that
+   one shows the C64's KERNAL at $E000 as soon as nothing is mapped there). */
+void map_none(void);
+void map_basic(void);
+void nmi_ignore(void);
+extern u8 __high_start[], __high_end[];
+static u8 d030_kept, port_kept;
+
+static void own(void)
+{
+  __asm__ volatile("sei");
+  POKE(0xD02FU, 0x47); /* MEGA65 registers on */
+  POKE(0xD02FU, 0x53);
+  d030_kept = PEEK(0xD030U);
+  POKE(0xD030U, (u8)(d030_kept & 0xDF));
+  port_kept = PEEK(0x0001U);
+  POKE(0x0001U, (u8)((port_kept & 0xF8) | 0x05)); /* I/O at $D000, RAM at $A000 and $E000 */
+  map_none();
+  POKE(0xFFFAU, (u8)((unsigned int)nmi_ignore & 0xFF)); /* the RESTORE key does nothing */
+  POKE(0xFFFBU, (u8)((unsigned int)nmi_ignore >> 8));
+  POKE(0xFFFEU, (u8)((unsigned int)nmi_ignore & 0xFF));
+  POKE(0xFFFFU, (u8)((unsigned int)nmi_ignore >> 8));
+  memset(__high_start, 0, (u16)(__high_end - __high_start));
+}
+
+static void leave(void)
+{
+  screen_off();
+  keys_quiet();
+  map_basic();
+  POKE(0x0001U, port_kept);
+  POKE(0xD030U, d030_kept);
+  __asm__ volatile("cli");
+}
+
 int main(void)
 {
   u8 n;
 
-  u8 missing;
-
-  POKE(0xD02FU, 0x47); /* MEGA65 registers on */
-  POKE(0xD02FU, 0x53);
-  /* the overlays first, while the machine is as the KERNAL and the drive know it */
-  missing = fetch_overlays();
-  POKE(0x0000U, 65); /* 40 MHz */
+  own();
   screen_on();
   title("");
 
@@ -4957,15 +4980,13 @@ int main(void)
     mg_poke(ATTIC + 1, 0xA5);
     if (mg_peek(ATTIC) != 0x5A || mg_peek(ATTIC + 1) != 0xA5)
       message("This machine has no attic RAM.");
-    else if (missing)
-      message("MODPLAY.OV1 to MODPLAY.OV4 belong next to the program, from the same build.");
     else
       n = 1;
   }
   if (!n) {
     keys_row("A key: leave");
     wait_key();
-    screen_off();
+    leave();
     return 1;
   }
   ramsize = (u32)rd(G_RAMSIZE) << 16;
@@ -4985,18 +5006,7 @@ int main(void)
     play_song();
   }
   wr(G_CONTROL, 0x80);
-  screen_off();
-  while (PEEK(0x0091U) == 0x7F) /* RUN/STOP still down would be BASIC's BREAK */
-    ;
-#if defined(NOGUS) && defined(KEYS) && defined(RERUN)
-  /* for an emulator: RUN typed for BASIC, once, to see the program start a second time */
-  POKE(0x02A7U, 0x55);
-  POKE(0x0277U, 0x52);
-  POKE(0x0278U, 0x55);
-  POKE(0x0279U, 0x4E);
-  POKE(0x027AU, 0x0D);
-  POKE(0x00C6U, 4);
-#endif
+  leave();
   return 0;
 }
 

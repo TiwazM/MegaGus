@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Makes a D81 disk image with modplay on it: the program first, so that LOAD"*",8 gets it, and
-its four overlays.
+Makes a D81 disk image with modplay on it: the program first, so that RUN"*" gets it, and
+the file of its overlays.
 
-  ./maked81.py [OUT.d81] [DIRECTORY with modplay.prg and MODPLAY.OV1 to .OV4]
+  ./maked81.py [OUT.d81] [DIRECTORY with modplay.prg and MODPLAY.OVL]
 
 A D81 is 80 tracks of 40 sectors of 256 bytes. Track 40 has the header (sector 0), the map
 of free sectors (1 and 2) and the directory (from 3); a file is a chain of sectors, each
@@ -74,8 +74,7 @@ def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "MODPLAY.D81")
     src = sys.argv[2] if len(sys.argv) > 2 else HERE
     files = [("MODPLAY", open(os.path.join(src, "modplay.prg"), "rb").read())]
-    for n in "1234":
-        files.append(("MODPLAY.OV" + n, open(os.path.join(src, "MODPLAY.OV" + n), "rb").read()))
+    files.append(("MODPLAY.OVL", open(os.path.join(src, "MODPLAY.OVL"), "rb").read()))
     with open(out, "wb") as f:
         f.write(make(files))
     blocks = sum(max(1, -(-len(d) // 254)) for _, d in files)

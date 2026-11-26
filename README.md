@@ -43,6 +43,8 @@ filters.
 | `MODPLAY.D81`                  | The module player                                        |
 | `MEGAGUS.D81`                  | The programming examples and the test program            |
 
+Everything on the two disks is for MEGA65 mode: `DLOAD` and `RUN`, no `GO64`.
+
 The core is the MEGA65's own of that day with MegaGus in it: everything else works as on
 a development core between releases 0.97 and the next.
 
@@ -83,11 +85,9 @@ prints `77 71 3`: "MG" and the engine's version.
 
 Copy `MODPLAY.D81` and your modules (`*.mod`, `*.s3m`, `*.xm`) to the SD card: the modules
 as files of the card itself, in any folder, not inside a disk image. Mount `MODPLAY.D81`,
-then
+then, in MEGA65 mode as the machine starts:
 
-    GO64
-    LOAD"*",8
-    RUN
+    RUN"*"
 
 | Key                 | What                                                            |
 |---------------------|-----------------------------------------------------------------|
@@ -154,10 +154,12 @@ The core builds as mega65-core does, with Vivado (2026.1 was used):
 MegaGus is `src/vhdl/megagus.vhdl`, switched on for a board by `megagus_ram_bits` in its
 top file (`19`, for 512 KB, in `src/vhdl/mega65r6.vhdl`; boards without it build as before).
 
-The programs want cc65 (and ACME for one example):
+The C programs are built with [llvm-mos](https://github.com/llvm-mos/llvm-mos-sdk), as
+MEGA65-mode programs (`LLVM_MOS`: where the SDK is unpacked; ACME builds the assembly
+example):
 
-    make USE_LOCAL_CC65=1 src/utilities/megagus/MODPLAY.D81
-    make USE_LOCAL_CC65=1 src/tests/megagus/megagustest.prg
+    make LLVM_MOS=~/llvm-mos src/utilities/megagus/MODPLAY.D81
+    make LLVM_MOS=~/llvm-mos src/tests/megagus/megagustest.prg src/examples/megagus/tune.prg
     python3 src/examples/megagus/makedisk.py
 
 ## Tests
@@ -170,7 +172,7 @@ The programs want cc65 (and ACME for one example):
 `MegaGus` in `megagus_test.py` is the model: under 300 lines of Python that give the
 engine's output bit for bit, and the reference for an emulator.
 On the MEGA65 itself `MEGAGUSTEST` on `MEGAGUS.D81` checks the engine and then plays nine
-things to listen to. [More about the tests](docs/megagus.md#tests).
+things to listen to (`DLOAD "MEGAGUSTEST"` and `RUN`). [More about the tests](docs/megagus.md#tests).
 
 ## Branches
 

@@ -883,22 +883,33 @@ $(TESTDIR)/instructiontiming.prg:       $(TESTDIR)/instructiontiming.c $(TESTDIR
 	$(call mbuild_header,$@)
 	$(CL65) -O -o $*.prg --mapfile $*.map $< $(TESTDIR)/instructiontiming_asm.s
 
-# MegaGus test program (docs/megagus.md); megagustest_host.py runs the same source on the host
-$(TESTDIR)/megagus/megagustest.prg:       $(TESTDIR)/megagus/megagustest.c $(CC65_DEPEND)
-	$(call mbuild_header,$@)
-	$(CL65) -O -o $*.prg --mapfile $*.map $<
+# MegaGus's programs for the MEGA65 (docs/megagus.md) are built with llvm-mos, as MEGA65-mode
+# programs: DLOAD and RUN. Set LLVM_MOS to where the SDK is unpacked if its bin directory is
+# not in the PATH (https://github.com/llvm-mos/llvm-mos-sdk).
+MOS_BIN=	$(if $(LLVM_MOS),$(LLVM_MOS)/bin/,)
+MOS_CLANG=	$(MOS_BIN)mos-mega65-clang
+MEGAGUS_LD=	$(UTILDIR)/megagus/mega65.ld
 
-# MegaGus module player (docs/megagus.md); modplay_host.py runs the same source on the host.
-# Its files come from the Hypervisor, with mega65-libc's two assembly sources for that.
-# The program is more than C64-mode memory holds at once, so it is in parts (modplay.cfg):
-# modplay.prg and four overlays, which go on the SD card next to it as MODPLAY.OV1 to .OV4.
-# STAMP is the build's number: the program does not take another build's overlays.
-$(UTILDIR)/megagus/modplay.prg:       $(UTILDIR)/megagus/modplay.c $(UTILDIR)/megagus/modplay.cfg $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s $(CC65_DEPEND)
+# The test program; megagustest_host.py runs the same source on the host
+$(TESTDIR)/megagus/megagustest.prg:       $(TESTDIR)/megagus/megagustest.c $(MEGAGUS_LD)
 	$(call mbuild_header,$@)
-	$(CL65NC) -t c64 -O -C $(UTILDIR)/megagus/modplay.cfg -DSTAMP=$(shell expr `date +%s` % 32000 + 1) -o $*.prg --mapfile $*.map $< $(MEGA65LIBCDIR)/src/fileio.s $(MEGA65LIBCDIR)/src/dirent.s
-	for n in 1 2 3 4; do mv $*.prg.$$n $(UTILDIR)/megagus/MODPLAY.OV$$n; done
+	$(MOS_CLANG) -Os -mlto-zp=0 -T $(MEGAGUS_LD) -o $@ $<
 
-# and the five on one disk image, the program first: mount it, LOAD"*",8 in C64 mode
+# The C example of docs/megagus-programming.md
+$(SRCDIR)/examples/megagus/tune.prg:      $(SRCDIR)/examples/megagus/tune.c $(MEGAGUS_LD)
+	$(call mbuild_header,$@)
+	$(MOS_CLANG) -Os -mlto-zp=0 -T $(MEGAGUS_LD) -I $(SRCDIR)/mega65-libc/clang/include -o $@ $< $(SRCDIR)/mega65-libc/clang/src/memory.c
+
+# The module player; modplay_host.py runs the same source on the host. It is more than fits
+# at once, so it is a main part (modplay.prg) and four overlays, which are cut out of the
+# linked program into one file, MODPLAY.OVL (modplay.ld is the plan of it). -fno-inline
+# keeps each function in the part it was written into.
+$(UTILDIR)/megagus/modplay.prg:       $(UTILDIR)/megagus/modplay.c $(UTILDIR)/megagus/modplay65.s $(UTILDIR)/megagus/modplay.ld $(UTILDIR)/megagus/makeovl.sh
+	$(call mbuild_header,$@)
+	$(MOS_CLANG) -Oz -fno-inline -Wl,--no-check-sections -T $(UTILDIR)/megagus/modplay.ld -o $@ $< $(UTILDIR)/megagus/modplay65.s
+	LLVM_MOS=$(LLVM_MOS) sh $(UTILDIR)/megagus/makeovl.sh $@.elf $(UTILDIR)/megagus/MODPLAY.OVL
+
+# and the two on one disk image, the program first: mount it, RUN"*"
 $(UTILDIR)/megagus/MODPLAY.D81:	$(UTILDIR)/megagus/modplay.prg $(UTILDIR)/megagus/maked81.py
 	python3 $(UTILDIR)/megagus/maked81.py $@ $(UTILDIR)/megagus
 

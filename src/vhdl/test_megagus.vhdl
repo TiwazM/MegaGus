@@ -12,6 +12,8 @@
 --
 -- The output (megagus_out.txt):
 --   T <edge>                a frame began: the clock edge its tick was at
+--   G <edge>                that frame's voices were let go: its queued writes are in
+--   Q <edge>                the engine made a queued write, at this clock edge
 --   S <left> <right>        that frame's output
 --   A <edge> <data>         an access (or a reset) took effect at this clock edge; what a
 --                           read returned
@@ -42,6 +44,8 @@ architecture tb of test_megagus is
   signal ack_rdata  : unsigned(7 downto 0);
 
   signal frame_tick  : std_logic;
+  signal voices_go   : std_logic;
+  signal queue_wrote : std_logic;
   signal audio_left  : signed(15 downto 0);
   signal audio_right : signed(15 downto 0);
 
@@ -71,17 +75,29 @@ begin
       ack_toggle => ack_toggle,
       ack_rdata => ack_rdata,
       frame_tick => frame_tick,
+      voices_go => voices_go,
+      queue_wrote => queue_wrote,
       audio_left => audio_left,
       audio_right => audio_right
       );
 
-  -- Every frame: where it began, and what came out (taken at clock 600, after the engine
-  -- has done all 32 voices and the master volume)
+  -- Every frame: where it began, and what came out (taken at clock 838, after the engine
+  -- has waited for the queue as long as it may, done all 32 voices and the master volume)
   process (clock)
     variable lo : line;
   begin
     if rising_edge(clock) then
       abs_edge <= abs_edge + 1;
+      if voices_go = '1' then
+        write(lo, string'("G "));
+        write(lo, abs_edge - 1);
+        writeline(fout, lo);
+      end if;
+      if queue_wrote = '1' then
+        write(lo, string'("Q "));
+        write(lo, abs_edge - 1);
+        writeline(fout, lo);
+      end if;
       if frame_tick = '1' then
         write(lo, string'("T "));
         write(lo, abs_edge - 1);
@@ -89,7 +105,7 @@ begin
         since_tick <= 2;
       else
         since_tick <= since_tick + 1;
-        if since_tick = 600 then
+        if since_tick = 838 then
           write(lo, string'("S "));
           write(lo, to_integer(audio_left));
           write(lo, string'(" "));

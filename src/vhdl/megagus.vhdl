@@ -20,9 +20,13 @@
 --   Globals from offset $200: ID, version, RAM size, control, master volume, ramp rate,
 --   the running and ended bitmaps, the output rate, and from $214 a count of the frames
 --   played: a clock for whatever plays music on it, 48 000 to the second.
+--   From $218 the queue: register writes with the frame each is to take effect at, which
+--   the engine then makes itself, on that frame. A program hands it the next half second
+--   of a tune whenever it has the time, and needs no interrupt to keep the tune's time.
 --
 -- One frame (an output sample) is 17 clocks a sounding voice, one clock an idle one, and four
--- for the master volume: 548 of the 843 that 40.5 MHz gives a 48 kHz frame.
+-- for the master volume: 548 of the 843 that 40.5 MHz gives a 48 kHz frame. Before the
+-- voices the frame's queued writes go in, two clocks each, for up to 280 clocks.
 --
 -- The CPU owns the voice registers, the engine owns each voice's state (position, current
 -- volume, running, direction). A write to CTRL or to POS's high byte is handed over by a
@@ -81,6 +85,44 @@ begin
 end architecture;
 
 
+-- The queue's memory: a write's frame (24 bits), register (10) and value (8)
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity megagus_queue_ram is
+  generic (
+    addr_bits : integer := 12
+    );
+  port (
+    clock : in  std_logic;
+    waddr : in  unsigned(addr_bits-1 downto 0);
+    we    : in  std_logic;
+    wdata : in  unsigned(41 downto 0);
+    raddr : in  unsigned(addr_bits-1 downto 0);
+    rdata : out unsigned(41 downto 0) := (others => '0')
+    );
+end entity;
+
+architecture rtl of megagus_queue_ram is
+  type ram_t is array(0 to 2**addr_bits-1) of unsigned(41 downto 0);
+  signal ram : ram_t := (others => (others => '0'));
+  attribute ram_style : string;
+  attribute ram_style of ram : signal is "block";
+begin
+  -- Data one clock after the address; a write shows to a read of the clock after it
+  process (clock)
+  begin
+    if rising_edge(clock) then
+      if we = '1' then
+        ram(to_integer(waddr)) <= wdata;
+      end if;
+      rdata <= ram(to_integer(raddr));
+    end if;
+  end process;
+end architecture;
+
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -89,7 +131,8 @@ entity megagus is
   generic (
     clock_frequency : integer := 40500000;
     sample_rate     : integer := 48000;
-    ram_addr_bits   : integer := 19           -- 19: 512 KB of sample RAM
+    ram_addr_bits   : integer := 19;          -- 19: 512 KB of sample RAM
+    queue_addr_bits : integer := 12           -- 12: a queue of 4096 writes
     );
   port (
     clock : in std_logic;
@@ -105,6 +148,10 @@ entity megagus is
     ack_rdata  : out unsigned(7 downto 0) := x"00";
 
     frame_tick  : out std_logic := '0';       -- one clock at the start of every frame
+    -- For a testbench: one clock as the frame's voices are let go (the queued writes that
+    -- were due are in), and one clock for each queued write as it is made
+    voices_go    : out std_logic := '0';
+    queue_wrote  : out std_logic := '0';
     audio_left  : out signed(15 downto 0) := (others => '0');
     audio_right : out signed(15 downto 0) := (others => '0')
     );
@@ -113,8 +160,11 @@ end entity;
 architecture rtl of megagus is
 
   constant NVOICES : integer := 32;
-  -- 2: the frame counter; 3: a stopped voice fades the last value it put out
-  constant VERSION : unsigned(7 downto 0) := x"03";
+  -- 2: the frame counter; 3: a stopped voice fades the last value it put out; 4: the queue
+  constant VERSION : unsigned(7 downto 0) := x"04";
+  -- How long a frame's voices wait for the queued writes that are due: two clocks a write,
+  -- so 140 of them are in before the first voice is looked at
+  constant QWAIT : integer := 280;
 
   -- Voice registers (the CPU writes, the engine and the CPU read): 16 bytes a voice
   type par_t is array(0 to NVOICES-1) of unsigned(127 downto 0);
@@ -156,6 +206,25 @@ architecture rtl of megagus is
   signal g_frames : unsigned(31 downto 0) := (others => '0');
   signal frames_snap : unsigned(23 downto 0) := (others => '0');
 
+  -- The queue: writes the CPU has handed over, each to be made when the frame count is at
+  -- its time or past it. They are made in the order they came, through the bus's own way
+  -- into the registers, when the CPU is not on it.
+  signal q_time  : unsigned(23 downto 0) := (others => '0');   -- $218-$21A
+  signal q_reg   : unsigned(9 downto 0) := (others => '0');    -- $21B, $21C
+  signal q_wptr  : unsigned(queue_addr_bits-1 downto 0) := (others => '0');
+  signal q_rptr  : unsigned(queue_addr_bits-1 downto 0) := (others => '0');
+  signal q_count : unsigned(queue_addr_bits downto 0) := (others => '0');
+  signal q_over  : std_logic := '0';                           -- a write found it full
+  signal q_we    : std_logic := '0';
+  signal q_waddr : unsigned(queue_addr_bits-1 downto 0) := (others => '0');
+  signal q_wdata : unsigned(41 downto 0) := (others => '0');
+  signal q_rdata : unsigned(41 downto 0);
+  -- 0: nothing queued, or the first of it not yet read; 1: reading; 3: q_rdata is the
+  -- write at the head
+  signal q_st    : integer range 0 to 3 := 0;
+  signal q_wait  : integer range 0 to QWAIT := 0;
+  signal b_queue : std_logic := '0';                           -- the bus is making a queued write
+
   -- The bus
   signal req_seen  : std_logic := '0';
   signal bus_state : integer range 0 to 3 := 0;
@@ -175,7 +244,7 @@ architecture rtl of megagus is
   signal tick_acc : integer range 0 to clock_frequency + sample_rate := 0;
 
   -- The engine
-  signal step : integer range 0 to 21 := 0;
+  signal step : integer range 0 to 22 := 0;
   signal vidx : unsigned(4 downto 0) := (others => '0');
 
   signal w_ctrl  : unsigned(7 downto 0) := x"00";
@@ -233,9 +302,22 @@ architecture rtl of megagus is
 
 begin
 
-  assert clock_frequency / sample_rate >= NVOICES * 17 + 8
+  assert clock_frequency / sample_rate >= NVOICES * 17 + 8 + QWAIT + 2
     report "MegaGus: a frame is too short for 32 voices at this clock and sample rate"
     severity failure;
+
+  queue0: entity work.megagus_queue_ram
+    generic map (
+      addr_bits => queue_addr_bits
+      )
+    port map (
+      clock => clock,
+      waddr => q_waddr,
+      we    => q_we,
+      wdata => q_wdata,
+      raddr => q_rptr,
+      rdata => q_rdata
+      );
 
   ram0: entity work.megagus_ram
     generic map (
@@ -295,6 +377,11 @@ begin
     variable curdir   : std_logic_vector(NVOICES-1 downto 0);
     variable ramsize  : unsigned(7 downto 0);
     variable rate16   : unsigned(15 downto 0);
+
+    -- the queue
+    variable q_ahead  : unsigned(23 downto 0);
+    variable q_due    : boolean;
+    variable q_free   : unsigned(queue_addr_bits downto 0);
   begin
     if rising_edge(clock) then
 
@@ -312,6 +399,13 @@ begin
       if tick then
         frame_tick <= '1';
       end if;
+      voices_go <= '0';
+      queue_wrote <= '0';
+
+      -- The write at the head of the queue is due when the frame count is at its time or
+      -- past it: up to 8 388 607 frames past it, which is nearly three minutes
+      q_ahead := q_rdata(41 downto 18) - g_frames(23 downto 0);
+      q_due := q_st = 3 and (q_ahead = 0 or q_ahead(23) = '1');
 
       -- The one multiplier, shared by a voice's four products and the master volume's two:
       -- operands set in step n are multiplied in n+1, the product is read in n+2.
@@ -335,7 +429,8 @@ begin
               vidx <= (others => '0');
               accl <= (others => '0');
               accr <= (others => '0');
-              step <= 1;
+              q_wait <= 0;
+              step <= 22;
             else
               -- stopped: the voices hold where they are, the output is silent
               audio_left <= (others => '0');
@@ -624,6 +719,17 @@ begin
           audio_left <= w_outl;
           audio_right <= sat16(shift_right(m_p, 6));
           step <= 0;
+
+        when 22 =>
+          -- The frame's queued writes first, so that all of a tick's writes are in before
+          -- any voice is looked at: until nothing is queued or the head is not yet due.
+          -- But not for longer than leaves the voices their time.
+          if q_count = 0 or (q_st = 3 and not q_due) or q_wait = QWAIT then
+            voices_go <= '1';
+            step <= 1;
+          else
+            q_wait <= q_wait + 1;
+          end if;
       end case;
 
       if st_we then
@@ -650,6 +756,13 @@ begin
       -----------------------------------------------------------------------------------------
       ram_a_we <= '0';
       soft_reset <= '0';
+      q_we <= '0';
+      if q_st = 0 and q_count /= 0 then
+        q_st <= 1;
+      elsif q_st = 1 then
+        q_st <= 3;
+      end if;
+      q_free := to_unsigned(2**queue_addr_bits, queue_addr_bits+1) - q_count;
       rv := to_integer(b_addr(8 downto 4));
       rr := to_integer(b_addr(3 downto 0));
       cpv := par(rv);
@@ -673,7 +786,23 @@ begin
             b_ram <= req_ram;
             b_addr <= req_addr;
             b_wdata <= req_wdata;
+            b_queue <= '0';
             bus_state <= 1;
+          elsif q_due then
+            -- The CPU is not on the bus: the queued write that is due, as if it made it
+            b_write <= '1';
+            b_ram <= '0';
+            b_addr <= resize(q_rdata(17 downto 8), 24);
+            b_wdata <= q_rdata(7 downto 0);
+            b_queue <= '1';
+            bus_state <= 1;
+            q_rptr <= q_rptr + 1;
+            q_count <= q_count - 1;
+            if q_count = 1 then
+              q_st <= 0;
+            else
+              q_st <= 1;
+            end if;
           end if;
 
         when 1 =>
@@ -759,9 +888,32 @@ begin
                 when 21 => rd := frames_snap(7 downto 0);
                 when 22 => rd := frames_snap(15 downto 8);
                 when 23 => rd := frames_snap(23 downto 16);
+                when 24 => rd := q_time(7 downto 0);
+                when 25 => rd := q_time(15 downto 8);
+                when 26 => rd := q_time(23 downto 16);
+                when 27 => rd := q_reg(7 downto 0);
+                when 28 => rd := "000000" & q_reg(9 downto 8);
+                when 30 =>
+                  -- empty, full, and whether a write was lost to a full queue
+                  rd := x"00";
+                  if q_count = 0 then
+                    rd(0) := '1';
+                  end if;
+                  rd(1) := q_count(queue_addr_bits);
+                  rd(7) := q_over;
+                when 31 =>
+                  -- room, in sixteens of writes (255: for 4080 or more)
+                  if q_free(queue_addr_bits downto 4) > 255 then
+                    rd := x"FF";
+                  else
+                    rd := resize(q_free(queue_addr_bits downto 4), 8);
+                  end if;
                 when others => null;
               end case;
-              if b_write = '1' then
+              if b_write = '1' and b_queue = '1' and b_addr(4 downto 3) = "11" then
+                -- a queued write to the queue's own registers: not made
+                null;
+              elsif b_write = '1' then
                 case to_integer(b_addr(4 downto 0)) is
                   when 4 =>
                     g_enable <= b_wdata(0);
@@ -769,6 +921,31 @@ begin
                   when 5 => g_master <= b_wdata;
                   when 6 => g_ramp <= b_wdata;
                   when 20 => g_frames <= (others => '0');   -- any value: count from here
+                  when 24 => q_time(7 downto 0) <= b_wdata;
+                  when 25 => q_time(15 downto 8) <= b_wdata;
+                  when 26 => q_time(23 downto 16) <= b_wdata;
+                  when 27 => q_reg(7 downto 0) <= b_wdata;
+                  when 28 => q_reg(9 downto 8) <= b_wdata(1 downto 0);
+                  when 29 =>
+                    -- a write for the queue: to the register after it, the next one
+                    if q_count(queue_addr_bits) = '1' then
+                      q_over <= '1';
+                    else
+                      q_we <= '1';
+                      q_waddr <= q_wptr;
+                      q_wdata <= q_time & q_reg & b_wdata;
+                      q_wptr <= q_wptr + 1;
+                      q_count <= q_count + 1;
+                    end if;
+                    q_reg <= q_reg + 1;
+                  when 30 =>
+                    if b_wdata(7) = '1' then        -- forget all that is queued
+                      q_wptr <= (others => '0');
+                      q_rptr <= (others => '0');
+                      q_count <= (others => '0');
+                      q_over <= '0';
+                      q_st <= 0;
+                    end if;
                   when 12 | 13 | 14 | 15 =>
                     -- a 1 clears that voice's ended flag
                     for i in 0 to 7 loop
@@ -780,8 +957,13 @@ begin
                 end case;
               end if;
             end if;
-            ack_rdata <= rd;
-            ack_toggle <= req_seen;
+            if b_queue = '0' then
+              ack_rdata <= rd;
+              ack_toggle <= req_seen;
+            else
+              queue_wrote <= '1';
+            end if;
+            b_queue <= '0';
             bus_state <= 0;
           end if;
 
@@ -819,6 +1001,15 @@ begin
         g_frames <= (others => '0');
         audio_left <= (others => '0');
         audio_right <= (others => '0');
+        q_time <= (others => '0');
+        q_reg <= (others => '0');
+        q_wptr <= (others => '0');
+        q_rptr <= (others => '0');
+        q_count <= (others => '0');
+        q_over <= '0';
+        q_we <= '0';
+        q_st <= 0;
+        voices_go <= '0';
       end if;
 
     end if;

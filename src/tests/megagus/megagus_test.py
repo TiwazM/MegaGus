@@ -26,6 +26,11 @@ RUN, LOOP, BIDI, BIT16, BACK, UNSIGNED, ENDED = 1, 2, 4, 8, 16, 32, 128
 G_ID, G_VERSION, G_RAMSIZE, G_CONTROL, G_MASTER, G_RAMP, G_VOICES = (
     0x200, 0x202, 0x203, 0x204, 0x205, 0x206, 0x207)
 G_ACTIVE, G_ENDED, G_RATE, G_FRAMES = 0x208, 0x20C, 0x210, 0x214
+# the queue: the frame its writes are for (3 bytes), the register the next one is for (2),
+# the write itself, the queue's state (bit 7 written: forget it all), and its room
+G_QTIME, G_QREG, G_QDATA, G_QSTAT, G_QFREE = 0x218, 0x21B, 0x21D, 0x21E, 0x21F
+QEMPTY, QFULL, QLOST, QFLUSH = 1, 2, 0x80, 0x80
+QWAIT = 280     # clocks a frame's voices wait for the queued writes that are due: two a write
 
 
 def sat16(x):
@@ -41,9 +46,10 @@ def s16(w):
 
 
 class MegaGus:
-    def __init__(self, ram_bits=19, rate=48000):
+    def __init__(self, ram_bits=19, rate=48000, queue_bits=12):
         self.ram_bits = ram_bits
         self.rate = rate
+        self.queue_size = 1 << queue_bits
         self.ram = bytearray(1 << ram_bits)
         self.par = [bytearray(16) for _ in range(NVOICES)]
         self.pos = [0] * NVOICES            # byte address << 16 | fraction
@@ -51,9 +57,11 @@ class MegaGus:
         self.hold = [0] * NVOICES           # the last value each voice put out while it ran
         self.pos_snap = 0
         self.frames_snap = 0
+        self.resets = 0
         self.reset()
 
     def reset(self):
+        self.resets += 1
         self.running = [0] * NVOICES
         self.dirv = [0] * NVOICES
         self.live = [0] * NVOICES
@@ -67,6 +75,10 @@ class MegaGus:
         self.ramp = 0x40
         self.frames = 0                     # played since the reset, or since $214 was written
         self.out = (0, 0)
+        self.queue = []                     # [frame, register, value]: writes still to be made
+        self.q_time = 0
+        self.q_reg = 0
+        self.q_over = 0
 
     # ---------------------------------------------------------------------------------------
     # The bus
@@ -106,7 +118,7 @@ class MegaGus:
         if g == 1:
             return 0x47
         if g == 2:
-            return 3                        # 3: a stopped voice fades its last value
+            return 4                        # 3: a stopped voice fades its last value; 4: the queue
         if g == 3:
             return (1 << self.ram_bits) // 65536
         if g == 4:
@@ -130,9 +142,37 @@ class MegaGus:
             return self.frames & 0xFF
         if 21 <= g <= 23:
             return (self.frames_snap >> (8 * (g - 21))) & 0xFF
+        if 24 <= g <= 26:
+            return (self.q_time >> (8 * (g - 24))) & 0xFF
+        if g == 27:
+            return self.q_reg & 0xFF
+        if g == 28:
+            return self.q_reg >> 8
+        if g == 30:
+            return ((QEMPTY if not self.queue else 0) | (QFULL if len(self.queue) == self.queue_size else 0)
+                    | (QLOST if self.q_over else 0))
+        if g == 31:
+            return min(255, (self.queue_size - len(self.queue)) >> 4)
         return 0
 
-    def write(self, ram, addr, data):
+    # ---------------------------------------------------------------------------------------
+    # The queue
+    # ---------------------------------------------------------------------------------------
+    def queue_due(self):
+        """Whether the write at the head of the queue is to be made now: the frame count is
+        at its time, or past it by less than half of what 24 bits count"""
+        if not self.queue:
+            return False
+        ahead = (self.queue[0][0] - self.frames) & 0xFFFFFF
+        return ahead == 0 or ahead >= 0x800000
+
+    def queue_pop(self):
+        """Make the write at the head of the queue"""
+        entry = self.queue.pop(0)
+        self.write(0, entry[1], entry[2], queued=True)
+        return entry
+
+    def write(self, ram, addr, data, queued=False):
         if ram:
             if addr < len(self.ram):
                 self.ram[addr] = data
@@ -152,6 +192,25 @@ class MegaGus:
         if addr >= 0x220:
             return
         g = addr & 0x1F
+        if queued and g >= 24:              # the queue's own registers are the CPU's only
+            return
+        if 24 <= g <= 26:
+            shift = 8 * (g - 24)
+            self.q_time = (self.q_time & ~(0xFF << shift)) | data << shift
+        elif g == 27:
+            self.q_reg = (self.q_reg & 0x300) | data
+        elif g == 28:
+            self.q_reg = (self.q_reg & 0xFF) | (data & 3) << 8
+        elif g == 29:
+            if len(self.queue) == self.queue_size:
+                self.q_over = 1
+            else:
+                self.queue.append([self.q_time, self.q_reg, data])
+            self.q_reg = (self.q_reg + 1) & 0x3FF
+        elif g == 30:
+            if data & QFLUSH:
+                self.queue = []
+                self.q_over = 0
         if g == 4:
             self.enable = data & 1
             if data & 0x80:             # as the reset line
@@ -178,18 +237,33 @@ class MegaGus:
             pass
         return self.out
 
-    def frame_steps(self):
+    def frame_steps(self, go=1, drain=True):
         """One frame, as the VHDL spreads it over the clock: yields the clock edge (counted
         from the frame's tick) of each point where the engine looks at or changes anything the
         bus can also reach, before it does. An access at an earlier edge has to be applied
-        first; at the same edge a read comes first and a write after."""
+        first; at the same edge a read comes first and a write after.
+
+        The queued writes that are due are made as the frame begins, before any voice is
+        looked at. (The VHDL makes them two clocks apart and lets the voices go, at edge
+        `go`, when they are in: after 280 clocks at the latest, so with more than 140 due at
+        once the rest are made while the voices are already being worked through. The test
+        takes `go` and the edge of each queued write from the VHDL's log, and passes
+        drain=False.)"""
         yield 0
-        if not self.enable:
-            self.out = (0, 0)
+        enabled, resets = self.enable, self.resets
+        if enabled:
+            self.frames = (self.frames + 1) & 0xFFFFFFFF
+        else:
+            self.out = (0, 0)               # stopped: the voices hold, the output is silent
+        if drain:
+            while self.queue_due():
+                self.queue_pop()
+        # A frame the engine was stopped for has no voices; nor has one that a queued write
+        # reset the engine in (go is None then: the VHDL never let its voices go)
+        if not enabled or go is None or self.resets != resets:
             return
-        self.frames = (self.frames + 1) & 0xFFFFFFFF
         accl = accr = 0
-        edge = 1
+        edge = go
         for v in range(NVOICES):
             yield edge
             p = self.par[v]
@@ -352,6 +426,35 @@ class Script:
         for a in range(G_FRAMES, G_FRAMES + 4):
             self.r(a)
 
+    # the queue: the frame the writes that follow are for, the register the next one is
+    # for, and writes to that register and the ones after it
+    def qtime(self, frame):
+        for i in range(3):
+            self.w(G_QTIME + i, (frame >> (8 * i)) & 0xFF)
+
+    def qreg(self, addr):
+        self.w(G_QREG, addr & 0xFF)
+        self.w(G_QREG + 1, addr >> 8)
+
+    def qpush(self, *values):
+        for value in values:
+            self.w(G_QDATA, value)
+
+    def qvoice(self, frame, v, ctrl, pos, start, end, freq, vol, pan):
+        """A note as a player starts one, all of it at one frame: the voice stopped, its
+        registers, and CTRL last"""
+        le = lambda x, n: [(x >> (8 * i)) & 0xFF for i in range(n)]
+        self.qtime(frame)
+        self.qreg(v * 16)
+        self.qpush(ctrl & ~RUN, pan, *le(vol, 2), *le(freq, 3), *le(pos, 3), *le(start, 3), *le(end, 3))
+        self.qreg(v * 16)
+        self.qpush(ctrl)
+
+    def from_zero(self):
+        """Count the frames from here: the next one is frame 1"""
+        self.frames(1)
+        self.w(G_FRAMES, 0)
+
     def status(self, v=None):
         for a in range(G_ACTIVE, G_ACTIVE + 8):
             self.r(a)
@@ -362,44 +465,88 @@ class Script:
 
 
 def replay(model, ops, log):
-    """The model's output for the testbench's log: every access applied at the clock edge
-    the VHDL took it. Returns (frames compared, reads compared, the differences)."""
+    """The model's output for the testbench's log: every access, and every queued write the
+    VHDL made, applied at the clock edge the VHDL took it. Returns (frames compared, reads
+    compared, queued writes made, the differences)."""
     ticks = [int(l.split()[1]) for l in log if l[0] == "T"]
+    goes = [int(l.split()[1]) for l in log if l[0] == "G"]
     outs = [tuple(map(int, l.split()[1:])) for l in log if l[0] == "S"]
     acc = [tuple(map(int, l.split()[1:])) for l in log if l[0] == "A"]
     assert len(acc) == len(ops), f"{len(acc)} accesses in the log, {len(ops)} in the script"
     assert len(ticks) - len(outs) in (0, 1)
+    # what happened on the bus, in the order of its clock edges: the script's accesses and
+    # the queue's writes (never two at one edge: there is one bus)
+    events = sorted([(at, i) for i, (at, _) in enumerate(acc)]
+                    + [(int(l.split()[1]), -1) for l in log if l[0] == "Q"])
+    assert all(a[0] != b[0] for a, b in zip(events, events[1:])), "two accesses at one edge"
+    assert [i for _, i in events if i >= 0] == list(range(len(ops)))
     bad = []
     nxt = 0
+    queued = [0, 0]             # made, and of them made after the frame's voices were let go
+    frame_of = {"tick": 0, "go": None, "before": 0, "made": 0}
 
     def apply_before(edge, engine_acts):
         # accesses before this edge; at it, reads (the engine's action comes after them)
         nonlocal nxt
-        while nxt < len(ops):
-            kind, ram, addr, data = ops[nxt]
-            at, got = acc[nxt]
+        while nxt < len(events):
+            at, i = events[nxt]
+            kind, ram, addr, data = ops[i] if i >= 0 else ("Q", 0, 0, 0)
             if at > edge or (at == edge and engine_acts and kind != "R"):
                 break
             if kind == "R":
                 want = model.read(ram, addr)
-                if want != got:
-                    bad.append(f"access {nxt} (edge {at}): read {ram}/{addr:#x}: "
-                               f"VHDL {got:#04x}, model {want:#04x}")
+                if want != acc[i][1]:
+                    bad.append(f"access {i} (edge {at}): read {ram}/{addr:#x}: "
+                               f"VHDL {acc[i][1]:#04x}, model {want:#04x}")
             elif kind == "W":
+                size = len(model.queue)
                 model.write(ram, addr, data)
+                if len(model.queue) > size:
+                    model.queue[-1].append(at)      # when it was queued
+            elif kind == "Q":
+                if not model.queue:
+                    bad.append(f"edge {at}: the VHDL made a queued write, the model's queue is empty")
+                else:
+                    if not model.queue_due():
+                        bad.append(f"edge {at}: the VHDL made a queued write for frame "
+                                   f"{model.queue[0][0]} at frame {model.frames}")
+                    entry = model.queue_pop()
+                    queued[0] += 1
+                    frame_of["made"] += 1
+                    # In before the voices, if it was there and due when the frame began?
+                    go = frame_of["go"]
+                    if go is not None and at > go and entry[3] < frame_of["tick"]:
+                        queued[1] += 1
+                        if frame_of["before"] < 100:
+                            bad.append(f"edge {at}: a queued write made after the frame's voices "
+                                       f"were let go, with only {frame_of['before']} before them")
+                    elif go is None or at <= go:
+                        frame_of["before"] += 1
             else:
                 model.reset()
             nxt += 1
 
+    g = 0
     for k, got in enumerate(outs):
-        for step_edge in model.frame_steps():
+        end = ticks[k + 1] if k + 1 < len(ticks) else 1 << 62
+        while g < len(goes) and goes[g] < ticks[k]:
+            g += 1
+        go = goes[g] if g < len(goes) and goes[g] < end else None
+        frame_of.update(tick=ticks[k], go=go, before=0, made=0)
+        if go is not None and go - ticks[k] > QWAIT + 1:
+            bad.append(f"frame {k}: the voices waited {go - ticks[k]} clocks")
+        for step_edge in model.frame_steps(None if go is None else go - ticks[k] + 1, drain=False):
             apply_before(ticks[k] + step_edge, True)
+        # the rest of the frame: nothing more from the engine
+        apply_before(end - 1, False)
         if model.out != got:
             bad.append(f"frame {k}: VHDL {got}, model {model.out}")
-        # the rest of the frame: nothing more from the engine
-        last = ticks[k + 1] - 1 if k + 1 < len(ticks) else 1 << 62
-        apply_before(last, False)
-    return len(outs), sum(1 for o in ops[:nxt] if o[0] == "R"), bad
+        # nothing that was due and queued in good time is left over, unless the engine made
+        # queued writes all through the frame (two clocks each: some 400 fit in one)
+        if model.queue_due() and model.queue[0][3] < end - 8 and frame_of["made"] < 300:
+            bad.append(f"frame {k}: a queued write for frame {model.queue[0][0]} not made by the "
+                       f"end of frame {model.frames}")
+    return len(outs), sum(1 for _, i in events[:nxt] if i >= 0 and ops[i][0] == "R"), queued, bad
 
 
 def build(ram_bits, seed):
@@ -599,7 +746,234 @@ def build(ram_bits, seed):
             s.clocks(rnd.randrange(900))
         else:
             s.frames(rnd.choice((1, 1, 2, 3, 7, 25)))
+    queue_tests(s, size, seed)
     return s
+
+
+def queue_tests(s, size, seed):
+    """The queue: writes handed over with the frame each is for"""
+    f = lambda x: int(x * 65536)
+    s.reset()
+    s.frames(2)
+    for a in range(0x218, 0x224):
+        s.r(a)
+
+    # two notes, a change of volume and a stop, each for its frame; the queue's own registers
+    # read back; then frame by frame as they come
+    s.from_zero()
+    s.qvoice(5, 2, RUN | LOOP, 0x100, 0x120, 0x163, f(1.7), 0xC000, 0x40)
+    s.qvoice(9, 3, RUN, 0x010, 0x010, 0x050, f(0.37), 0xFFFF, 0xC0)
+    s.qtime(12)
+    s.qreg(3 * 16 + VOL)
+    s.qpush(0x00, 0x40)
+    s.qtime(30)
+    s.qreg(2 * 16 + CTRL)
+    s.qpush(LOOP)
+    for a in (G_QSTAT, G_QFREE, G_QTIME, G_QTIME + 1, G_QTIME + 2, G_QREG, G_QREG + 1, G_QDATA):
+        s.r(a)
+    for _ in range(12):
+        s.frames(1)
+        s.status(2)
+        s.status(3)
+        s.r(G_QSTAT)
+        s.count()
+    s.frames(40)
+    s.r(G_QSTAT)
+    s.status(2)
+
+    # for a frame gone by: made at once. And one more than half of 24 bits ahead counts as
+    # gone by
+    s.qtime(3)
+    s.qreg(2 * 16 + VOL)
+    s.qpush(0x34, 0x12)
+    s.clocks(20)
+    s.r(2 * 16 + VOL)
+    s.r(2 * 16 + VOL + 1)
+    s.r(G_QSTAT)
+    s.qtime(0x900000)
+    s.qreg(3 * 16 + PAN)
+    s.qpush(0x11)
+    s.clocks(20)
+    s.r(3 * 16 + PAN)
+    s.r(G_QSTAT)
+
+    # a tick as full as a tracker's gets: eight notes on one frame, 136 writes, all in before
+    # the frame's first voice. Then twelve: more than fit before the voices
+    for voices in (8, 12):
+        s.from_zero()
+        for v in range(voices):
+            a = 0x100 + 0x80 * v
+            s.qvoice(5, v, RUN | LOOP | (BIT16 if v & 1 else 0), a, a, a + 0x60, f(0.3 + 0.21 * v),
+                     0x3000 + 0x800 * v, 20 * v)
+        s.r(G_QFREE)
+        s.frames(4)
+        s.r(G_QSTAT)
+        s.frames(1)
+        s.r(G_QSTAT)
+        s.status(voices - 1)
+        s.frames(12)
+
+    # the engine stopped: the frames stand still and what is queued waits; what is for a
+    # frame gone by is still made
+    s.from_zero()
+    s.qtime(5)
+    s.qreg(G_MASTER)
+    s.qpush(0x10)
+    s.frames(2)
+    s.w(G_CONTROL, 0)
+    s.frames(6)
+    s.r(G_MASTER)
+    s.r(G_QSTAT)
+    s.count()
+    s.qtime(1)
+    s.qreg(G_RAMP)
+    s.qpush(0x20)
+    s.clocks(30)
+    s.r(G_RAMP)
+    s.r(G_QSTAT)
+    s.w(G_CONTROL, 1)
+    s.frames(6)
+    s.r(G_MASTER)
+    s.r(G_QSTAT)
+
+    # a queued write stops the engine at a frame; writes queued for the queue's own
+    # registers are not made
+    s.from_zero()
+    s.qtime(3)
+    s.qreg(G_QTIME)
+    s.qpush(0x55)
+    s.qreg(G_QSTAT)
+    s.qpush(QFLUSH)
+    s.qtime(4)
+    s.qreg(G_CONTROL)
+    s.qpush(0)
+    s.qtime(5)
+    s.qreg(G_MASTER)
+    s.qpush(0x08)
+    s.frames(8)
+    for a in (G_CONTROL, G_QSTAT, G_MASTER, G_QTIME):
+        s.r(a)
+    s.count()
+    s.w(G_CONTROL, 1)
+    s.frames(4)
+    s.r(G_MASTER)
+    s.r(G_QSTAT)
+
+    # forgetting what is queued, and queueing again after it
+    s.from_zero()
+    s.qtime(50)
+    s.qreg(2 * 16 + PAN)
+    s.qpush(1, 2, 3)
+    s.r(G_QSTAT)
+    s.w(G_QSTAT, QFLUSH)
+    s.r(G_QSTAT)
+    s.r(G_QFREE)
+    s.frames(3)
+    s.from_zero()
+    s.qtime(2)
+    s.qreg(4 * 16 + PAN)
+    s.qpush(0x77)
+    s.frames(4)
+    s.r(4 * 16 + PAN)
+
+    # full: 4096 writes for a frame far off, three more that are lost, the room as it goes
+    s.from_zero()
+    s.qtime(100000)
+    for i in range(4099):
+        if i % 16 == 0:
+            s.qreg(6 * 16)
+        s.qpush(i & 0xFF)
+        if i % 500 == 499 or i > 4090:
+            s.r(G_QFREE)
+            s.r(G_QSTAT)
+    s.frames(2)
+    s.w(G_QSTAT, QFLUSH)
+    s.r(G_QSTAT)
+    s.r(G_QFREE)
+
+    # full again, and all of it due on one frame: it takes the engine some frames
+    s.from_zero()
+    s.voice(0, RUN | LOOP, 0x100, 0x100, 0x180, f(0.9), 0x4000, 0x80)
+    s.qtime(60)
+    for i in range(4096):
+        if i % 4 == 0:
+            s.qreg((16 + i % 16) * 16 + PAN)
+        s.qpush((i * 7) & 0xFF)
+    s.r(G_QSTAT)
+    s.count()
+    for _ in range(8):
+        s.frames(9)
+        s.r(G_QSTAT)
+        s.r(G_QFREE)
+        s.count()
+    s.frames(30)
+    s.r(G_QSTAT)
+
+    # a queued reset: the engine is as after its reset line, and what was queued behind it
+    # is forgotten
+    s.from_zero()
+    s.voice(2, RUN | LOOP, 0x100, 0x120, 0x163, f(1.7), 0xC000, 0x40)
+    s.qtime(4)
+    s.qreg(G_CONTROL)
+    s.qpush(0x81)
+    s.qtime(6)
+    s.qreg(G_MASTER)
+    s.qpush(0x3F)
+    s.frames(9)
+    s.status(2)
+    for a in (G_QSTAT, G_MASTER, G_CONTROL):
+        s.r(a)
+    s.count()
+
+    # anything: notes and single writes queued for frames just gone and soon to come, with
+    # the CPU's own writes and reads among them, at any clock
+    rnd = random.Random(seed + 1)
+    est = 0.0
+    for n in range(1500):
+        if n % 40 == 0:
+            s.from_zero()
+            est = 0.0
+        for _ in range(rnd.choice((0, 1, 1, 2, 4))):
+            s.clocks(rnd.choice((0, 0, 1, 2, 5, 40)))
+            v = rnd.randrange(NVOICES)
+            when = max(0, int(est) + rnd.choice((-2, 0, 1, 1, 2, 3, 8)))
+            what = rnd.randrange(11)
+            if what < 3:
+                a, b = sorted((rnd.randrange(size), rnd.randrange(size)))
+                s.qvoice(when, v, rnd.randrange(64), rnd.randrange(a, b + 1), a, b,
+                         rnd.randrange(1 << 18), rnd.randrange(65536), rnd.randrange(256))
+            elif what == 3:
+                s.qtime(when)
+                s.qreg(v * 16 + VOL)
+                s.qpush(rnd.randrange(256), rnd.randrange(256))
+            elif what == 4:
+                s.qtime(when)
+                s.qreg(v * 16 + rnd.randrange(16))
+                s.qpush(rnd.randrange(256))
+            elif what == 5:
+                s.qtime(when)
+                s.qreg(rnd.choice((G_MASTER, G_RAMP, G_ENDED, G_QTIME + 1)))
+                s.qpush(rnd.randrange(16))
+            elif what == 6:
+                a, b = sorted((rnd.randrange(size), rnd.randrange(size)))
+                s.voice(v, rnd.randrange(64), rnd.randrange(a, b + 1), a, b,
+                        rnd.randrange(1 << 18), rnd.randrange(65536), rnd.randrange(256))
+            elif what == 7:
+                s.r(rnd.choice((G_QSTAT, G_QFREE, v * 16, 0x200 + rnd.randrange(0x20))))
+            elif what == 8:
+                s.status(v)
+            elif what == 9:
+                s.reg(v, CTRL, rnd.randrange(64))
+            else:
+                s.w(G_QSTAT, rnd.choice((0, 0, 0, QFLUSH)))
+        if rnd.random() < 0.5:
+            c = rnd.randrange(900)
+            s.clocks(c)
+            est += c / 843.75
+        else:
+            c = rnd.choice((1, 1, 2, 3, 7))
+            s.frames(c)
+            est += c
 
 
 def main():
@@ -624,9 +998,10 @@ def main():
     outs = [l for l in log if l[0] == "S"]
     loud = sum(1 for l in outs if l != "S 0 0")
     clipped = sum(1 for l in outs if "32767" in l or "-32768" in l)
-    frames, reads, bad = replay(MegaGus(ram_bits), s.ops, log)
+    frames, reads, queued, bad = replay(MegaGus(ram_bits), s.ops, log)
     print(f"{len(s.ops)} accesses, {frames} frames ({loud} not silent, {clipped} clipped), "
-          f"{reads} reads")
+          f"{reads} reads, {queued[0]} queued writes ({queued[1]} of them after their frame's "
+          f"voices were let go)")
     if bad:
         print(f"FAIL: the VHDL and the model differ in {len(bad)} places")
         for b in bad[:12]:

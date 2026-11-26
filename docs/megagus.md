@@ -104,6 +104,15 @@ What it keeps is the idea; what it changes:
   more than the sound's rms (`spikes.py`), where the recording of the day before, on
   VERSION 2, has 17 (the VERSION 2 model's output has 17 by the same count, and 4 with a
   player that clears RUN alone). With that player on VERSION 3: 3.
+- Release 1.0 (2026-11-26): the core built from the committed source (`912a238`, the
+  engine's VHDL as in VERSION 3 above; worst slack 0.074 ns), as a bitstream and as a core
+  file for a flash slot, with the player's disk and a disk of the examples and the test
+  program. That build was loaded over JTAG into an R6 and there: the test program's 12
+  tests pass and its nine sounds play; the four [examples](megagus-programming.md#the-examples)
+  and the README's ten lines of BASIC play what they should; the player plays ZEN.S3M as
+  the model does (`hwcompare.py`: spectrum 0.928 over 40 seconds, the day before 0.926;
+  `spikes.py`: 2 frames). The core file was made and checked by mega65-tools' `coretool`;
+  it has not been flashed into a slot and started from there.
 - No emulator support yet.
 
 ## Where it is
@@ -128,20 +137,20 @@ its own master volume. The two sum, and clip rather than wrap.
 
 ## In the FPGA
 
-Of the R6's FPGA (XC7A200T), from Vivado's report by module on the routed VERSION 3 build
-(2026-11-25):
+Of the R6's FPGA (XC7A200T), from Vivado's report by module on the routed build of
+release 1.0 (2026-11-26):
 
 |                     | MegaGus | of the FPGA | The whole core | of the FPGA |
 |---------------------|--------:|------------:|---------------:|------------:|
-| LUTs                |   2 208 |       1.6 % |         77 031 |      57.6 % |
-| of them LUT RAM     |     210 |       0.5 % |         13 788 |      30.5 % |
+| LUTs                |   2 211 |       1.7 % |         77 049 |      57.6 % |
+| of them LUT RAM     |     210 |       0.5 % |         13 788 |      29.8 % |
 | Flip-flops          |   1 206 |      0.45 % |         48 219 |      18.0 % |
 | Block RAMs, 36 kbit |     128 |      35.1 % |            267 |      73.2 % |
 | DSP blocks          |       1 |      0.14 % |            151 |      20.4 % |
 
 The 128 block RAMs are the sample RAM, 4 KB each; the core has five 18 kbit ones besides,
 so about 95 of the 365 are free and a megabyte of sample RAM would not fit in them. The engine is
-2 004 of the LUTs, and choosing among the sample RAM's blocks the other 204. The LUT RAM is
+2 004 of the LUTs, and choosing among the sample RAM's blocks the other 207. The LUT RAM is
 the voices' tables, and the DSP block the one multiplier that interpolation, volume and pan
 share. The address decoding outside the `megagus` module, a few gates, is not counted.
 
@@ -822,6 +831,7 @@ hurry through the ticks it missed.
 | `src/utilities/megagus/spikes.py`       | Counts one-frame spikes in a recording or render  |
 | `docs/megagus-programming.md`           | How to use it from BASIC, C and assembly          |
 | `src/examples/megagus/`                 | The programs that guide goes through              |
+| `src/examples/megagus/makedisk.py`      | They and the test program on one disk image       |
 
 ## Tests
 

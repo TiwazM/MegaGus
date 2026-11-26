@@ -2,7 +2,12 @@
 
 How to make sound with MegaGus from your own program: BASIC 65, C or assembly. The
 registers are described one by one in [megagus.md](megagus.md); this is the way through
-them. The examples are in `src/examples/megagus/`.
+them. The examples are in `src/examples/megagus/`, and ready to run on the release's
+`MEGAGUS.D81` (see [The examples](#the-examples)).
+
+You need a MEGA65 running the MegaGus core: [the README](../README.md#installing) says how
+to get it there. What follows describes the engine of release 1.0, which calls itself
+version 3; where an older one differs, it says so.
 
 ## The idea
 
@@ -38,9 +43,10 @@ An access takes a little longer than one to ordinary memory (a handful of clocks
 40 MHz), which only matters when you move a lot: use the DMA or `lcopy` for samples.
 
 **Is it there?** `$EFFF200` reads `$4D` and `$EFFF201` reads `$47` ("MG") on a core with
-MegaGus. Check before anything else, and start from a known state by resetting the engine:
-write `$81` and then `$01` to `$EFFF204`. That stops every voice and puts the master volume
-and the ramp rate back to their defaults; it leaves the sample RAM alone.
+MegaGus, and `$EFFF202` reads the engine's version (see [Versions](#versions)). Check
+before anything else, and start from a known state by resetting the engine: write `$81` and
+then `$01` to `$EFFF204`. That stops every voice and puts the master volume and the ramp
+rate back to their defaults; it leaves the sample RAM alone.
 
 ## Getting a sample in
 
@@ -80,7 +86,8 @@ A voice has 16 registers' worth of bytes:
 
 | Offset | Name  | Bytes | What                                                    |
 |--------|-------|-------|---------------------------------------------------------|
-| +0     | CTRL  | 1     | bit 0 run, bit 1 loop, bit 3 16-bit, bit 5 unsigned     |
+| +0     | CTRL  | 1     | bit 0 run, 1 loop, 2 ping-pong, 3 16-bit, 4 backward,   |
+|        |       |       | 5 unsigned; reads back bit 7: played to its end         |
 | +1     | PAN   | 1     | 0 left, 128 middle, 255 right                           |
 | +2     | VOL   | 2     | 0 to 65535                                              |
 | +4     | FREQ  | 3     | how fast: 65536 is one sample each output frame         |
@@ -93,15 +100,24 @@ at `$000400` for POS, START and END. Low byte first throughout.
 
 To start a sound, in this order:
 
-1. write 0 to CTRL (the voice stops while you set it up; what it last played fades for a
-   millisecond meanwhile, whatever you write. On an engine before version 3 of an unsigned
-   or 16-bit sample clear bit 0 only and leave the others: there they say how the sample
-   is read during that millisecond);
+1. write 0 to CTRL: the voice stops while you set it up. What it last put out fades away
+   over the next millisecond, whatever you write meanwhile;
 2. write PAN, VOL, FREQ, START and END;
 3. write POS, low byte first: the write to its third byte is what sets it;
-4. write CTRL: 1 to play once to END, 3 to loop between START and END.
+4. write CTRL: 1 to play once to END, 3 to loop between START and END (add 8 for a 16-bit
+   sample, 32 for an unsigned one).
 
-In C all of 2 and 3 can be one `lcopy` of 15 bytes (see `voice()` in `tune.c`).
+In C all of 2 and 3 can be one `lcopy` of 15 bytes (see `voice()` in `tune.c`). Or 1 to 3
+are one copy of all 16, with bit 0 clear in the CTRL byte, and 4 the one write after it:
+the module player starts every note that way, with the DMA.
+
+The voice starts with the next output frame, at most 1/48000 s later, and its level rises
+from where it was (from nothing, if the voice was silent) to VOL in about a millisecond.
+
+*On an engine before version 3* a stopped voice went on reading its sample while it faded,
+as CTRL, POS and the sample RAM were at that moment. There, stop an unsigned or a 16-bit
+sample by clearing bit 0 of CTRL alone, with the other bits as they were, and do not write
+over a sample that has only just stopped.
 
 **How fast.** FREQ decides the pitch:
 
@@ -141,9 +157,16 @@ register, `$EFFF206`, sets how fast for all voices: `$40` by default, `$01` for 
 slowest, 85 ms across the full range, 0 for no ramp). That is what you use to avoid
 clicks:
 
-- **To stop a sound**, don't just clear CTRL in the middle of a loud wave. Write 0 to VOL,
-  wait a few milliseconds, then write 0 to CTRL.
-- **To restart a voice that is still sounding**, do the same first.
+- **To stop a sound**, write 0 to CTRL. The voice holds the last value it put out and
+  that fades with the ramp: no click, wherever in the wave it was. (Before version 3,
+  write 0 to VOL first, wait a few milliseconds, and then stop.)
+- **To let a sound die away**, a millisecond is too short: lower VOL yourself, a step
+  every few milliseconds, and stop the voice when it has reached 0.
+- **To start a note where one is still sounding**, give the old one its fade: stop the
+  voice, wait two milliseconds, then start the new note. Started at once, the new note
+  begins at the old one's level with a small step in the wave, which a loud bass shows.
+  With 32 voices there is a better way: start the new note on another voice and let the
+  old one fade on its own.
 - **PAN has no ramp.** Move it in small steps, or while the voice is quiet.
 
 ## Many voices
@@ -183,9 +206,24 @@ and start it again.
   to wait by: `while ((now() - start) < frames)`. Writing anything to `$EFFF214` starts
   the count from 0, and it stands still while the engine is off. `tune.c` keeps time that
   way, and the module player takes its ticks from it.
-- **On an engine of version 1** (`$EFFF202` reads 1) there is no counter. There a voice
-  does it: with VOL 0, looping at FREQ `$010000`, it moves exactly one byte each output
-  frame, and its POS is the clock. `tune.c` falls back to that.
+- **On an engine of version 1** there is no counter. There a voice does it: with VOL 0,
+  looping at FREQ `$010000`, it moves exactly one byte each output frame, and its POS is
+  the clock. `tune.c` falls back to that.
+
+## Versions
+
+`$EFFF202` reads the engine's version. A program written for one version runs on every
+later one.
+
+| Version | Since      | What came with it                                          |
+|---------|------------|------------------------------------------------------------|
+| 1       | 2026-11-22 | The engine: 32 voices, 512 KB, all that is not named below |
+| 2       | 2026-11-25 | FRAMES at `$EFFF214`: the engine's own clock               |
+| 3       | 2026-11-26 | A stopped voice fades its last value: CTRL = 0 stops any   |
+|         |            | voice cleanly. This is the engine of release 1.0           |
+
+A program that wants to run on all three reads the version once and, below 3, stops its
+voices the old way (see [Playing it](#playing-it)); below 2, keeps time with a voice.
 
 ## With the rest of the MEGA65's sound
 
@@ -217,8 +255,24 @@ built for the R6 board).
 | `tune.c`     | C (cc65, C64 mode)  | a short tune on three voices, timed by the engine   |
 | `tone.asm`   | assembly (ACME)     | a tone, with a DMA copy and a 32-bit pointer        |
 
-The BASIC listings are plain text, to type in or to paste into a transfer tool. Build
-lines for the other two are at the top of each file. `kick.raw` is a drum for `sample.bas`.
+`kick.raw` is a drum for `sample.bas`. Build lines for the C and the assembly are at the
+top of each file; the BASIC listings are plain text, to type in, to paste into a transfer
+tool, or to turn into program files with a tokenizer.
 
-As of 2026-11-24 `tune.c` and `tone.asm` build, and none of the four has been run on a
-MEGA65 yet.
+**On a disk.** The release has all four, with the drum and the
+[test program](megagus.md#test-program), as `MEGAGUS.D81` (`makedisk.py` makes it). Mount
+it, and
+
+| To run     | In          | Type                                           |
+|------------|-------------|------------------------------------------------|
+| the chord  | MEGA65 mode | `DLOAD "CHORD"` and `RUN`                      |
+| the sample | MEGA65 mode | `DLOAD "SAMPLE"` and `RUN`                     |
+| the tone   | MEGA65 mode | `DLOAD "TONE"` and `RUN`                       |
+| the tune   | C64 mode    | `GO64`, then `LOAD "TUNE",8` and `RUN`         |
+| the tests  | C64 mode    | `GO64`, then `LOAD "MEGAGUSTEST",8` and `RUN`  |
+
+All four were run from that disk on a MEGA65 R6 with the core of release 1.0 (2026-11-26)
+and recorded over HDMI: the chord is its three notes (261.7, 329.7 and 392 Hz, the lowest
+on the left and the highest on the right), the tone 440 Hz, the drum plays at each press of
+SPACE (and the sample RAM begins with `kick.raw`'s bytes after the `BLOAD`), and the tune
+plays its two seconds and says `done`.

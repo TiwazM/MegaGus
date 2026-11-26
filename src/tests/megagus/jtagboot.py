@@ -8,8 +8,12 @@ CPU the moment the new core's serial monitor answers, sets the Hypervisor's own 
 first boot" flag (the BIT at first_boot_flag_instruction becomes a JMP, as Hyppo does itself
 later), and resets. Nothing is written to the flash: a power cycle brings the old core back.
 
-  ./jtagboot.py [FILE.bit]      default: bin/mega65r6.bit, the flag's address from
-                                src/hyppo/HICKUP.sym of the same build
+  ./jtagboot.py [--timer] [FILE.bit]    default: bin/mega65r6.bit, the flag's address from
+                                        src/hyppo/HICKUP.sym of the same build
+
+--timer is for a core built before 2026-11-26 with ROM 920413 on the SD card: that ROM
+waits on CIA 2's timer A as it starts, which in those cores held 1 and never showed what the
+ROM waits for; the option writes $FFFF to it. Later cores have a 6526's own value there.
 
 M65RS and M65_DEVICE in the environment name the tool and the serial port (macOS).
 """
@@ -70,7 +74,9 @@ def byte_at(fd, addr):
 
 
 def main():
-    bit = sys.argv[1] if len(sys.argv) > 1 else os.path.join(TOP, "bin", "mega65r6.bit")
+    args = [a for a in sys.argv[1:] if a != "--timer"]
+    timer = "--timer" in sys.argv[1:]
+    bit = args[0] if args else os.path.join(TOP, "bin", "mega65r6.bit")
     sym = open(os.path.join(TOP, "src", "hyppo", "HICKUP.sym")).read()
     flag = int(re.search(r"\bfirst_boot_flag_instruction\s*=\s*\$([0-9a-fA-F]+)", sym).group(1), 16)
     addr = 0xFFF8000 + (flag - 0x8000)
@@ -117,9 +123,10 @@ def main():
                  "is of another build. Left alone.")
     cmd(fd, f"s{addr:07x} 4c")
     now_is = byte_at(fd, addr)
-    # The ROM (920413) waits on CIA 2's timer A before it sets it up. On a boot started this
-    # way the timer still holds its power-on value of 1, and BASIC never starts: give it $FFFF.
-    cmd(fd, "sffd3d04 ff ff")
+    if timer:
+        # ROM 920413 waits on CIA 2's timer A before it sets it up; in a core from before
+        # 2026-11-26 the timer holds its power-on value of 1 and BASIC never starts
+        cmd(fd, "sffd3d04 ff ff")
     cmd(fd, "!", 0.2)
     cmd(fd, "t0", 0.2)
     print(p.communicate()[0].strip())

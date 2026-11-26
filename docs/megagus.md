@@ -132,6 +132,18 @@ What it keeps is the idea; what it changes:
   something only a JTAG boot does. With ROM 920423 on the card (as `MEGA651.ROM`, `1` held
   at the start) the flashed core starts into BASIC and the engine answers with its ID and
   version. The test program and the player have not been run again on that ROM.
+- The core starts with ROM 920413 (2026-11-26, `71635be`): the newer ROMs are betas, and
+  920423 was found to break the mouse, on the 0.97.2 core too. A 6526's timers and their
+  latches are all ones after a reset; this core's CIAs had 1 and 0 after power-on and kept
+  whatever they held through a reset. Now they are all ones at both
+  (`src/vhdl/cia6526.vhdl`; `test_cia_reset.vhdl` checks it and fails on the CIA as it
+  was), and the ROM finds the bit it waits for at once. That build (worst slack 0.082 ns)
+  loaded over JTAG into the R6, without `jtagboot.py` setting the timer, with ROM 920413:
+  BASIC comes up; after a reset with a count of 1 left running in CIA 2's timer A it comes
+  up again; `TI` counts seconds and `CLR TI` clears it; the test program's 12 tests pass;
+  the player plays ZEN.S3M as the model does (0.943) and ends in BASIC. It is the core of
+  release 1.0 in place of the one before. Not tried: this build from a flash slot, and
+  with a ROM of 920417 or later (which do not look at the timer that way).
 - No emulator support yet.
 
 ## Where it is
@@ -161,7 +173,7 @@ release 1.0 (2026-11-26):
 
 |                     | MegaGus | of the FPGA | The whole core | of the FPGA |
 |---------------------|--------:|------------:|---------------:|------------:|
-| LUTs                |   2 211 |       1.7 % |         77 049 |      57.6 % |
+| LUTs                |   2 211 |       1.7 % |         77 093 |      57.6 % |
 | of them LUT RAM     |     210 |       0.5 % |         13 788 |      29.8 % |
 | Flip-flops          |   1 206 |      0.45 % |         48 219 |      18.0 % |
 | Block RAMs, 36 kbit |     128 |      35.1 % |            267 |      73.2 % |
@@ -169,7 +181,7 @@ release 1.0 (2026-11-26):
 
 The 128 block RAMs are the sample RAM, 4 KB each; the core has five 18 kbit ones besides,
 so about 95 of the 365 are free and a megabyte of sample RAM would not fit in them. The engine is
-2 004 of the LUTs, and choosing among the sample RAM's blocks the other 207. The LUT RAM is
+2 006 of the LUTs, and choosing among the sample RAM's blocks the other 205. The LUT RAM is
 the voices' tables, and the DSP block the one multiplier that interpolation, volume and pan
 share. The address decoding outside the `megagus` module, a few gates, is not counted.
 
@@ -358,9 +370,9 @@ To try the core without flashing it, `src/tests/megagus/jtagboot.py` loads `bin/
 over JTAG with `m65rs` and keeps it running. `m65rs jtag bit` alone is not enough: the core
 has MEGAFLASH in it, which on a first boot restarts the FPGA from flash slot 1. The script
 halts the CPU as the new core comes up, sets the Hypervisor's "not the first boot" flag and
-resets. It also loads CIA 2's timer A with `$FFFF`: the timer holds its power-on value of 1,
-and ROM 920413 then waits on it forever before BASIC starts. A boot from a flash slot meets
-the same: the core needs ROM 920417 or later there (see [Status](#status)).
+resets. For a core built before the CIA's timers were given a 6526's reset values
+(2026-11-26; see [Status](#status)) and ROM 920413, `--timer` also loads CIA 2's timer A
+with `$FFFF`, without which that ROM waits forever before BASIC starts.
 
 It first prints one line a test:
 
@@ -862,6 +874,8 @@ hurry through the ticks it missed.
 | `src/vhdl/megagus.vhdl`                 | The engine and its sample RAM                     |
 | `src/vhdl/slow_devices.vhdl`            | Where it sits on the bus (`megagus_ram_bits`)     |
 | `src/vhdl/audio_complex.vhdl`           | Where its audio joins the mixer                   |
+| `src/vhdl/cia6526.vhdl`                 | The CIA: its timers' reset values, for ROM 920413 |
+| `src/vhdl/test_cia_reset.vhdl`          | Testbench: those reset values                     |
 | `src/tests/megagus/megagus_test.py`     | A bit-exact model of the engine, and the tests    |
 | `src/vhdl/test_megagus.vhdl`            | Testbench: the engine against the model           |
 | `src/vhdl/test_megagus_bus.vhdl`        | Testbench: the engine in `slow_devices.vhdl`      |

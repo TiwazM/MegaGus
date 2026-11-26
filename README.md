@@ -48,6 +48,18 @@ a development core between releases 0.97 and the next.
 
 ## Installing
 
+**The ROM first.** This core needs MEGA65 ROM **920417 or later** on the SD card. With the
+ROM of release 0.97 (920413) it stops at a blue screen and BASIC never appears: that ROM
+waits at start-up on a CIA timer in a way that only worked through a fault of the 0.97 core,
+which has since been put right
+([mega65-core#899](https://github.com/MEGA65/mega65-core/issues/899)), so every core built
+from `development` needs the newer ROM, with MegaGus or without. The newer ROMs are the
+"ROM beta" versions (920423 in November 2026;
+[what changed](https://github.com/MEGA65/mega65-rom-public/blob/main/CHANGELOG.md)), for
+registered owners at [files.mega65.org](https://files.mega65.org). To keep the old ROM for
+the 0.97 core as well, name the new one `MEGA651.ROM` and hold `1` while the MEGA65 starts
+(any character does: the Hypervisor then loads `MEGA65` + that character + `.ROM`).
+
 **Into a flash slot.** As any MEGA65 core: copy the `.cor` file to the SD card, switch the
 MEGA65 on with NO SCROLL held down, and in the core menu hold CTRL and press the number of
 the slot to put it in. Use one from 2 to 7: slot 0 is the factory core, and slot 1 is where
@@ -60,7 +72,8 @@ mega65-tools' `coretool`; the testing so far was all with the bitstream over JTA
     python3 src/tests/megagus/jtagboot.py megagus-1.0-mega65r6.bit
 
 The core runs until the MEGA65 is switched off. (The script does more than load the
-bitstream: left alone, a core loaded this way restarts the FPGA from flash slot 1.)
+bitstream: left alone, a core loaded this way restarts the FPGA from flash slot 1. It also
+sets the timer the older ROM waits on, so over JTAG ROM 920413 starts too.)
 
 **Is it there?** In MEGA65 mode `PRINT PEEK($EFFF200);PEEK($EFFF201);PEEK($EFFF202)`
 prints `77 71 3`: "MG" and the engine's version.

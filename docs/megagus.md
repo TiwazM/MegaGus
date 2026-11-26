@@ -111,8 +111,16 @@ What it keeps is the idea; what it changes:
   tests pass and its nine sounds play; the four [examples](megagus-programming.md#the-examples)
   and the README's ten lines of BASIC play what they should; the player plays ZEN.S3M as
   the model does (`hwcompare.py`: spectrum 0.928 over 40 seconds, the day before 0.926;
-  `spikes.py`: 2 frames). The core file was made and checked by mega65-tools' `coretool`;
-  it has not been flashed into a slot and started from there.
+  `spikes.py`: 2 frames). The core file was made and checked by mega65-tools' `coretool`.
+- Flashed into a slot of that R6 (2026-11-26) the core starts, and stops at a blue screen
+  with ROM 920413 on the SD card: the CPU goes round `BIT $DD04`, `BVS`, `BPL` at `$56E6`
+  of that ROM, which waits for bit 6 or 7 of the low byte of CIA 2's timer A. The timer
+  holds 1 and reads 1 or 0. On the 0.97 core a timer read `$FFFF` for a moment each time it
+  ran out, and that let the ROM through; `development` put that right in 2025
+  ([mega65-core#899](https://github.com/MEGA65/mega65-core/issues/899)) and ROM 920417 no
+  longer waits so. So this core needs ROM 920417 or later, as any built from `development`
+  does. It is what `jtagboot.py` had met and got round by setting the timer, taken then for
+  something only a JTAG boot does. With a newer ROM the flashed core has not been started yet.
 - No emulator support yet.
 
 ## Where it is
@@ -315,9 +323,9 @@ To try the core without flashing it, `src/tests/megagus/jtagboot.py` loads `bin/
 over JTAG with `m65rs` and keeps it running. `m65rs jtag bit` alone is not enough: the core
 has MEGAFLASH in it, which on a first boot restarts the FPGA from flash slot 1. The script
 halts the CPU as the new core comes up, sets the Hypervisor's "not the first boot" flag and
-resets. It also loads CIA 2's timer A with `$FFFF`: on a boot started this way the timer
-still holds its power-on value of 1, and the ROM (920413) then waits on it forever before
-BASIC starts. (Why a normal boot doesn't meet this has not been looked into.)
+resets. It also loads CIA 2's timer A with `$FFFF`: the timer holds its power-on value of 1,
+and ROM 920413 then waits on it forever before BASIC starts. A boot from a flash slot meets
+the same: the core needs ROM 920417 or later there (see [Status](#status)).
 
 It first prints one line a test:
 

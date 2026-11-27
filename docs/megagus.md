@@ -157,8 +157,13 @@ What it keeps is the idea; what it changes:
   The R6 core with it was built (`fffc500`): the setup slack is 0.005 ns, and two paths of
   the video upscaler, which this does not touch, missed hold by 0.023 ns; a hold fix after
   routing (`phys_opt_design -hold_fix`, then `route_design`) mended them, and that
-  bitstream has all constraints met (worst hold slack 0.011 ns). It has not been loaded
-  into a MEGA65: nothing of the queue has run on the machine yet.
+  bitstream has all constraints met (worst hold slack 0.011 ns). On an R6 (2026-11-27,
+  loaded with `jtagboot.py`): the test program's 12 tests pass; a write queued three
+  seconds ahead was made on its frame and not before; and a program that hands the queue
+  a module's writes half a second ahead (the Second Reality demo's MegaGus edition) gave,
+  over HDMI, the waveform of the model's rendering (correlation 0.999 to 1.000 a second,
+  for the ten seconds compared, and above 0.96 over most of five minutes). The test
+  program has no test of the queue yet.
 - No emulator support yet.
 
 ## Where it is

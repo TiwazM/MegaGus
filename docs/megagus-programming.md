@@ -6,8 +6,8 @@ them. The examples are in `src/examples/megagus/`, and ready to run on the relea
 `MEGAGUS.D81` (see [The examples](#the-examples)).
 
 You need a MEGA65 running the MegaGus core: [the README](../README.md#installing) says how
-to get it there. What follows describes the engine of release 1.0, which calls itself
-version 3; where an older one differs, it says so.
+to get it there. What follows describes the engine of release 1.1, which calls itself
+version 4; where an older one differs, it says so.
 
 ## The idea
 
@@ -260,9 +260,9 @@ later one.
 | 1       | 2026-11-22 | The engine: 32 voices, 512 KB, all that is not named below |
 | 2       | 2026-11-25 | FRAMES at `$EFFF214`: the engine's own clock               |
 | 3       | 2026-11-26 | A stopped voice fades its last value: CTRL = 0 stops any   |
-|         |            | voice cleanly. This is the engine of release 1.0           |
+|         |            | voice cleanly. Release 1.0                                 |
 | 4       | 2026-11-27 | The queue: writes handed over ahead of time, each made on  |
-|         |            | its frame. On the branch `megagus-queue`, not released     |
+|         |            | its frame. This is the engine of release 1.1               |
 
 A program that wants to run on all of them reads the version once and, below 3, stops its
 voices the old way (see [Playing it](#playing-it)); below 2, keeps time with a voice. The

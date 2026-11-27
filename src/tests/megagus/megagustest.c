@@ -52,6 +52,11 @@
 #define G_RUNNING 0x208
 #define G_ENDED 0x20C
 #define G_RATE 0x210
+#define G_FRAMES 0x214 /* from version 2: the frames played */
+#define G_QTIME 0x218  /* from version 4: the queue of writes, each made on its frame */
+#define G_QREG 0x21B
+#define G_QDATA 0x21D
+#define G_QSTAT 0x21E
 
 /* where the samples go */
 #define SINE8 0x000000UL  /* 64 bytes: one cycle, 8 bits */
@@ -665,6 +670,49 @@ static void test_rate(void)
   done();
 }
 
+/* The queue (from version 4): a write handed over with the frame it is for is made by the
+   engine on that frame, not before; and what is queued can be forgotten. */
+static void test_queue(void)
+{
+  unsigned long t, now;
+  unsigned char n;
+
+  if (rd(G_VERSION) < 4) {
+    say("queue                     not in version %u\n", (unsigned int)rd(G_VERSION));
+    return;
+  }
+  test("queue");
+  wr(G_CONTROL, 0x80);
+  check("empty", rd(G_QSTAT), 0x01);
+  wr(V(5) + PAN, 0x11);
+  t = (rd32(G_FRAMES) + 14400UL) & 0xFFFFFFUL; /* 0.3 s from now */
+  wr24(G_QTIME, t);
+  wr16(G_QREG, V(5) + PAN);
+  wr(G_QDATA, 0x5A);
+  check("the register after it", rd(G_QREG), (V(5) + PAN + 1) & 0xFF);
+  check("something queued", rd(G_QSTAT), 0x00);
+  check("not made at once", rd(V(5) + PAN), 0x11);
+  wait_frames(8); /* 0.13 s or more */
+  check("not made early", rd(V(5) + PAN), 0x11);
+  for (n = 0; n < 100 && rd(V(5) + PAN) == 0x11; n++)
+    wait_frame();
+  now = rd32(G_FRAMES) & 0xFFFFFFUL;
+  check("made", rd(V(5) + PAN), 0x5A);
+  /* seen within a video frame of its time, and not before it */
+  check_range("frames after its time", (now - t) & 0xFFFFFFUL, 0, 1200);
+  check("empty again", rd(G_QSTAT), 0x01);
+
+  t = (rd32(G_FRAMES) + 9600UL) & 0xFFFFFFUL;
+  wr24(G_QTIME, t);
+  wr16(G_QREG, V(5) + PAN);
+  wr(G_QDATA, 0x77);
+  wr(G_QSTAT, 0x80); /* forget it */
+  check("forgotten", rd(G_QSTAT), 0x01);
+  wait_frames(15);
+  check("and not made", rd(V(5) + PAN), 0x5A);
+  done();
+}
+
 static void test_all_voices(void)
 {
   unsigned char v;
@@ -825,6 +873,7 @@ int main(void)
   test_loops();
   test_rate();
   test_all_voices();
+  test_queue();
 
   if (failed_tests)
     say("\n%u of %u tests failed\n", failed_tests, tests);

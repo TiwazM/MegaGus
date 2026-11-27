@@ -145,7 +145,7 @@ What it keeps is the idea; what it changes:
   release 1.0 in place of the one before. Not tried: this build from a flash slot, and
   with a ROM of 920417 or later (which do not look at the timer that way).
 - A queue of register writes, each made by the engine on the frame it was queued for
-  (2026-11-27, VERSION 4, on the branch `megagus-queue`; [what it is](#global-registers)):
+  (2026-11-27, VERSION 4; [what it is](#global-registers)):
   for a program that cannot be there on every tick, and for which an interrupt is no
   answer either (a demo's effects that take the interrupt vectors' memory for something
   else). The VHDL and the model agree on it in simulation: 16 123 queued writes among
@@ -162,8 +162,19 @@ What it keeps is the idea; what it changes:
   seconds ahead was made on its frame and not before; and a program that hands the queue
   a module's writes half a second ahead (the Second Reality demo's MegaGus edition) gave,
   over HDMI, the waveform of the model's rendering (correlation 0.999 to 1.000 a second,
-  for the ten seconds compared, and above 0.96 over most of five minutes). The test
-  program has no test of the queue yet.
+  for the ten seconds compared, and above 0.96 over most of five minutes).
+- Release 1.1 (2026-11-27) is that core (`fffc500`, the bitstream with the hold fix) with
+  the test program's own test of the queue. That VERSION 4 leaves what VERSION 3 did as it
+  was, was looked at three ways. The two models side by side, given the same 400 000
+  accesses with the queue left alone: 220 246 output frames and 48 025 reads the same, but
+  for the version number. The tests on this computer: the VHDL against the model, the
+  test program and the player's self-test on the model, all pass. And on the R6, with that
+  bitstream loaded over JTAG and ROM 920413: the test program's 13 tests pass, the queue's
+  among them (a write queued 0.3 s ahead is made within a video frame of its time and not
+  before, and one that is forgotten is not made); its sounds play; the player plays
+  ZEN.S3M as the model does (`hwcompare.py`: 0.943, as on the core of 1.0) and ends in
+  BASIC. Not tried: the 1.1 core file from a flash slot. A program that does not write
+  `$EFFF218`-`$EFFF21F` meets one difference: the version number reads 4.
 - No emulator support yet.
 
 ## Where it is
@@ -189,19 +200,21 @@ its own master volume. The two sum, and clip rather than wrap.
 ## In the FPGA
 
 Of the R6's FPGA (XC7A200T), from Vivado's report by module on the routed build of
-release 1.0 (2026-11-26):
+release 1.1 (2026-11-27; in 1.0, without the queue, MegaGus was 2 211 LUTs, 1 206
+flip-flops and 128 block RAMs):
 
 |                     | MegaGus | of the FPGA | The whole core | of the FPGA |
 |---------------------|--------:|------------:|---------------:|------------:|
-| LUTs                |   2 211 |       1.7 % |         77 093 |      57.6 % |
-| of them LUT RAM     |     210 |       0.5 % |         13 788 |      29.8 % |
-| Flip-flops          |   1 206 |      0.45 % |         48 219 |      18.0 % |
-| Block RAMs, 36 kbit |     128 |      35.1 % |            267 |      73.2 % |
+| LUTs                |   2 496 |       1.9 % |         77 429 |      57.9 % |
+| of them LUT RAM     |     224 |       0.5 % |         13 802 |      29.9 % |
+| Flip-flops          |   1 342 |      0.50 % |         48 343 |      18.1 % |
+| Block RAMs, 36 kbit |     133 |      36.4 % |            272 |      74.5 % |
 | DSP blocks          |       1 |      0.14 % |            151 |      20.4 % |
 
-The 128 block RAMs are the sample RAM, 4 KB each; the core has five 18 kbit ones besides,
-so about 95 of the 365 are free and a megabyte of sample RAM would not fit in them. The engine is
-2 006 of the LUTs, and choosing among the sample RAM's blocks the other 205. The LUT RAM is
+128 of the block RAMs are the sample RAM, 4 KB each, and 5 the queue (4096 writes of 42
+bits); the core has five 18 kbit ones besides, so about 90 of the 365 are free and a
+megabyte of sample RAM would not fit in them. The engine is 2 133 of the LUTs, choosing
+among the sample RAM's blocks 210 and among the queue's 153. The LUT RAM is
 the voices' tables, and the DSP block the one multiplier that interpolation, volume and pan
 share. The address decoding outside the `megagus` module, a few gates, is not counted.
 
@@ -454,6 +467,7 @@ It first prints one line a test:
 | ping-pong            | POS stays inside the loop, going both ways                           |
 | 48 khz               | 96 000 frames take two seconds of video frames                       |
 | 32 voices            | All run at once                                                      |
+| queue                | A queued write is made on its frame, not before; a forgotten one not |
 
 A test that fails says what it read and what it expected (in hex). All of this is silent.
 Then, after a key, nine things to hear, each announced on the screen: a 440 Hz tone in the

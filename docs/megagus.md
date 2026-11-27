@@ -200,7 +200,9 @@ What it keeps is the idea; what it changes:
   times fail not once (14 times in 130 before). The test program, now of 14 tests, run
   three times running with its sounds played and BASIC in between, passes all 14 each
   time. The player plays ZEN.S3M as the model does (0.943, as on 1.0 and 1.1) and ends in
-  BASIC. Not tried: the 1.2 core file from a flash slot.
+  BASIC. The 1.2 core file, flashed into a slot of that R6 and started from there
+  (2026-11-27): the test program passes twice running, the player plays modules, and a
+  demo that plays its module through the queue runs with its music.
 - No emulator support yet.
 
 ## Where it is

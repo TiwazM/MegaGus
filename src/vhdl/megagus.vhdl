@@ -160,8 +160,9 @@ end entity;
 architecture rtl of megagus is
 
   constant NVOICES : integer := 32;
-  -- 2: the frame counter; 3: a stopped voice fades the last value it put out; 4: the queue
-  constant VERSION : unsigned(7 downto 0) := x"04";
+  -- 2: the frame counter; 3: a stopped voice fades the last value it put out; 4: the queue;
+  -- 5: what was written to CTRL and POS reads back at once, also while the voice is in work
+  constant VERSION : unsigned(7 downto 0) := x"05";
   -- How long a frame's voices wait for the queued writes that are due: two clocks a write,
   -- so 140 of them are in before the first voice is looked at
   constant QWAIT : integer := 280;
@@ -475,13 +476,17 @@ begin
           w_run   <= vrun;
           w_dir   <= vdir;
 
+          -- What the CPU wrote is the voice's state from this clock on. (It used to become
+          -- that only with the voice's last step, 16 clocks later, while the flags that say
+          -- "the CPU wrote" were already cleared here: a read of CTRL, POS or RUNNING in
+          -- between showed the voice as it was before the write.)
+          st_we := true;
+          st_wpos := vposi & vfrac;
+          st_wvol := vcv;
+          running(vi) <= vrun;
+          dirv(vi) <= vdir;
           if vrun = '0' and live(vi) = '0' then
-            -- Silent: nothing to mix, only what the CPU wrote to keep
-            st_we := true;
-            st_wpos := vposi & vfrac;
-            st_wvol := (others => '0');
-            running(vi) <= '0';
-            dirv(vi) <= vdir;
+            -- Silent: nothing to mix
             next_v := true;
           else
             step <= 2;
@@ -735,7 +740,7 @@ begin
       if st_we then
         st_pos(vi) <= st_wpos;
         st_vol(vi) <= st_wvol;
-        if st_wvol /= x"0000" or (step = 17 and w_run_n = '1') then
+        if st_wvol /= x"0000" or (step = 17 and w_run_n = '1') or (step = 1 and vrun = '1') then
           live(vi) <= '1';
         else
           live(vi) <= '0';

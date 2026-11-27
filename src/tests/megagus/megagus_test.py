@@ -118,7 +118,8 @@ class MegaGus:
         if g == 1:
             return 0x47
         if g == 2:
-            return 4                        # 3: a stopped voice fades its last value; 4: the queue
+            return 5                        # 3: a stopped voice fades its last value; 4: the
+                                            # queue; 5: CTRL and POS read back at once
         if g == 3:
             return (1 << self.ram_bits) // 65536
         if g == 4:
@@ -287,15 +288,18 @@ class MegaGus:
             cv = self.vol[v] if self.live[v] else 0
             self.ctrl_load[v] = 0
             self.pos_load[v] = 0
+            # what the CPU wrote is the voice's state from here on: a read while the voice is
+            # worked on (the 16 clocks that follow) shows it
+            self.pos[v] = posi << 16 | frac
+            self.vol[v] = cv
+            self.running[v] = run
+            self.dirv[v] = back
 
             if not run and not self.live[v]:
                 # silent: one clock
-                self.pos[v] = posi << 16 | frac
-                self.vol[v] = 0
-                self.running[v] = 0
-                self.dirv[v] = back
                 edge += 1
                 continue
+            self.live[v] = 1 if (cv or run) else 0
 
             sp, st, en = posi >> sh, start >> sh, end >> sh
             i1 = sp + 1
@@ -386,6 +390,7 @@ class Script:
     def __init__(self):
         self.lines = []
         self.ops = []           # the accesses, in order: (kind, ram, addr, data)
+        self.expect = {}        # for some reads: (mask, the value those bits must have)
 
     def w(self, addr, data, ram=0):
         self.lines.append(f"W {ram} {addr} {data}")
@@ -394,6 +399,11 @@ class Script:
     def r(self, addr, ram=0):
         self.lines.append(f"R {ram} {addr}")
         self.ops.append(("R", ram, addr, 0))
+
+    def rx(self, addr, mask, value):
+        """A read whose answer is known: not only must the VHDL and the model agree on it"""
+        self.expect[len(self.ops)] = (mask, value)
+        self.r(addr)
 
     def frames(self, n):
         if n:
@@ -464,7 +474,7 @@ class Script:
                 self.r(v * 16 + POS + i)
 
 
-def replay(model, ops, log):
+def replay(model, ops, log, expect=None):
     """The model's output for the testbench's log: every access, and every queued write the
     VHDL made, applied at the clock edge the VHDL took it. Returns (frames compared, reads
     compared, queued writes made, the differences)."""
@@ -498,6 +508,9 @@ def replay(model, ops, log):
                 if want != acc[i][1]:
                     bad.append(f"access {i} (edge {at}): read {ram}/{addr:#x}: "
                                f"VHDL {acc[i][1]:#04x}, model {want:#04x}")
+                if expect and i in expect and (want & expect[i][0]) != expect[i][1]:
+                    bad.append(f"access {i} (edge {at}): read {ram}/{addr:#x} is {want:#04x}: "
+                               f"its bits {expect[i][0]:#04x} should be {expect[i][1]:#04x}")
             elif kind == "W":
                 size = len(model.queue)
                 model.write(ram, addr, data)
@@ -747,7 +760,40 @@ def build(ram_bits, seed):
         else:
             s.frames(rnd.choice((1, 1, 2, 3, 7, 25)))
     queue_tests(s, size, seed)
+    readback_tests(s, seed)
     return s
+
+
+def readback_tests(s, seed):
+    """What is written to CTRL and POS reads back at once, at whatever clock of the frame the
+    read comes: also in the clocks in which the engine, having taken the write, is working
+    on that voice (VERSION 5; before it, a read there showed the voice as it had been)."""
+    f = lambda x: int(x * 65536)
+    rnd = random.Random(seed + 2)
+    s.frames(3)             # (a reset at a frame's beginning, as everywhere in this script)
+    s.reset()
+    s.frames(2)
+    v = 6
+    s.voice(v, 0, 0x100, 0x100, 0x180, f(0.5), 0x4000, 0x80)
+    for n in range(2500):
+        gap = lambda: s.clocks(rnd.choice((0, 0, 0, 1, 2, 3, 5, 9, 14, 30)))
+        s.clocks(rnd.randrange(60))
+        s.reg(v, CTRL, RUN | LOOP)                  # started: running, at once
+        gap()
+        s.rx(v * 16 + CTRL, RUN, RUN)
+        s.rx(G_ACTIVE, 1 << v, 1 << v)
+        s.clocks(rnd.randrange(900))
+        s.reg(v, CTRL, LOOP | BACK)                 # stopped, and backward
+        gap()
+        s.rx(v * 16 + CTRL, RUN | BACK, BACK)
+        s.rx(G_ACTIVE, 1 << v, 0)
+        s.clocks(rnd.randrange(60))
+        pos = 0x100 + (n * 7) % 0x80                # stopped, it stays where it is put
+        s.reg(v, POS, pos, 3)
+        gap()
+        s.rx(v * 16 + POS, 0xFF, pos & 0xFF)
+        s.rx(v * 16 + POS + 1, 0xFF, pos >> 8)
+        s.clocks(rnd.randrange(900))
 
 
 def queue_tests(s, size, seed):
@@ -998,7 +1044,7 @@ def main():
     outs = [l for l in log if l[0] == "S"]
     loud = sum(1 for l in outs if l != "S 0 0")
     clipped = sum(1 for l in outs if "32767" in l or "-32768" in l)
-    frames, reads, queued, bad = replay(MegaGus(ram_bits), s.ops, log)
+    frames, reads, queued, bad = replay(MegaGus(ram_bits), s.ops, log, s.expect)
     print(f"{len(s.ops)} accesses, {frames} frames ({loud} not silent, {clipped} clipped), "
           f"{reads} reads, {queued[0]} queued writes ({queued[1]} of them after their frame's "
           f"voices were let go)")

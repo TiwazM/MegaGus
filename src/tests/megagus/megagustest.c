@@ -713,6 +713,31 @@ static void test_queue(void)
   done();
 }
 
+/* What is written to CTRL reads back at once (from version 5). Before that the engine showed
+   the voice as it had been for 16 clocks of each frame, while it worked on the voice with the
+   write already taken: one read in fifty, of those made right after a write. */
+static void test_readback(void)
+{
+  unsigned int n, stale = 0;
+
+  if (rd(G_VERSION) < 5) {
+    say("reads back at once        not before version 5\n");
+    return;
+  }
+  test("reads back at once");
+  voice(9, 0, 0, 0, 64, 0x010000UL, 0, 128);
+  for (n = 0; n < 3000; n++) {
+    wr(V(9) + CTRL, RUN | LOOP);
+    if (!(rd(G_RUNNING + 1) & 2))
+      stale++;
+    wr(V(9) + CTRL, 0);
+    if (rd(G_RUNNING + 1) & 2)
+      stale++;
+  }
+  check("reads of the old state", stale, 0);
+  done();
+}
+
 static void test_all_voices(void)
 {
   unsigned char v;
@@ -874,6 +899,7 @@ int main(void)
   test_rate();
   test_all_voices();
   test_queue();
+  test_readback();
 
   if (failed_tests)
     say("\n%u of %u tests failed\n", failed_tests, tests);

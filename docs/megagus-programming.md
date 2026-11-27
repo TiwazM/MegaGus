@@ -6,8 +6,8 @@ them. The examples are in `src/examples/megagus/`, and ready to run on the relea
 `MEGAGUS.D81` (see [The examples](#the-examples)).
 
 You need a MEGA65 running the MegaGus core: [the README](../README.md#installing) says how
-to get it there. What follows describes the engine of release 1.1, which calls itself
-version 4; where an older one differs, it says so.
+to get it there. What follows describes the engine of release 1.2, which calls itself
+version 5; where an older one differs, it says so.
 
 ## The idea
 
@@ -197,7 +197,9 @@ and start it again.
 
 - **Has it finished?** CTRL bit 0 reads 1 while the voice plays. Bit 7 reads 1 once a voice
   has played to its END and stopped by itself; `$EFFF20C` has those bits for all voices,
-  and writing a 1 clears one.
+  and writing a 1 clears one. What you write to CTRL reads back at once: a voice just
+  started reads as running. (Before version 5 it could read as it had been before the
+  write, for a moment in each frame: there, wait a frame, 21 microseconds, before asking.)
 - **Where is it?** POS reads back the voice's position as it plays. Read the low byte
   first: that holds the other two for the next two reads.
 - **A clock.** The engine counts the frames it plays, 48 000 a second and in step with the
@@ -262,11 +264,14 @@ later one.
 | 3       | 2026-11-26 | A stopped voice fades its last value: CTRL = 0 stops any   |
 |         |            | voice cleanly. Release 1.0                                 |
 | 4       | 2026-11-27 | The queue: writes handed over ahead of time, each made on  |
-|         |            | its frame. This is the engine of release 1.1               |
+|         |            | its frame. Release 1.1                                     |
+| 5       | 2026-11-27 | What is written to CTRL and POS reads back at once. This   |
+|         |            | is the engine of release 1.2                               |
 
 A program that wants to run on all of them reads the version once and, below 3, stops its
 voices the old way (see [Playing it](#playing-it)); below 2, keeps time with a voice. The
-queue is there from 4 only.
+queue is there from 4 only; below 5, do not trust a voice's state read in the same frame
+as a write to its CTRL or POS.
 
 ## With the rest of the MEGA65's sound
 

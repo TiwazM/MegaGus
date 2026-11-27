@@ -176,6 +176,31 @@ What it keeps is the idea; what it changes:
   BASIC. The 1.1 core file, flashed into a slot of that R6 and started from there, runs
   the test program and passes it (2026-11-27). A program that does not write
   `$EFFF218`-`$EFFF21F` meets one difference: the version number reads 4.
+- What is written to CTRL and POS reads back at once (2026-11-27, VERSION 5). Run a second
+  time on the flashed core of 1.1, the test program failed one test, and another time
+  another one: each time a voice's state read right after a write to its CTRL. The engine
+  takes such a write at the first step of its work on the voice and clears the flag that
+  says "the CPU wrote"; the voice's state became what was written only with its last step,
+  16 clocks later, and a read in between showed the voice as it had been. Measured on the
+  R6: 787 of 40 000 reads made at once after a write were of the old state (16 of a
+  frame's 843 clocks are 1.9 %), none of 40 000 made two frames later; the voice tests
+  repeated 130 times failed 14 times. No write was lost and no sound was wrong; it was so
+  since VERSION 1, and showed once the test program was built by a compiler fast enough
+  to read that soon. A program that started a voice and asked at once whether it was
+  running was told no one time in fifty. Now what the engine takes is the voice's state
+  from that first step on. The test on this computer reads back after writes at every
+  phase of the frame, with the answers known (on the engine as it was, 62 such reads are
+  wrong); the engine's output is unchanged (the VERSION 3 and 5 models put out the same
+  220 246 frames); and the test program has a test of it. (The test program's run on this
+  computer could not have found it: there it reads between whole frames only.)
+- Release 1.2 (2026-11-27) is the core with that (`4f5abc2`; all timing constraints met as
+  built, worst setup slack 0.063 ns and hold 0.022 ns, with no fix after routing this
+  time). Loaded over JTAG into the R6, ROM 920413: of 40 000 reads made at once after a
+  write to CTRL none is of the old state (787 before), and the voice tests repeated 125
+  times fail not once (14 times in 130 before). The test program, now of 14 tests, run
+  three times running with its sounds played and BASIC in between, passes all 14 each
+  time. The player plays ZEN.S3M as the model does (0.943, as on 1.0 and 1.1) and ends in
+  BASIC. Not tried: the 1.2 core file from a flash slot.
 - No emulator support yet.
 
 ## Where it is
@@ -201,21 +226,21 @@ its own master volume. The two sum, and clip rather than wrap.
 ## In the FPGA
 
 Of the R6's FPGA (XC7A200T), from Vivado's report by module on the routed build of
-release 1.1 (2026-11-27; in 1.0, without the queue, MegaGus was 2 211 LUTs, 1 206
+release 1.2 (2026-11-27; in 1.0, without the queue, MegaGus was 2 211 LUTs, 1 206
 flip-flops and 128 block RAMs):
 
 |                     | MegaGus | of the FPGA | The whole core | of the FPGA |
 |---------------------|--------:|------------:|---------------:|------------:|
-| LUTs                |   2 496 |       1.9 % |         77 429 |      57.9 % |
-| of them LUT RAM     |     224 |       0.5 % |         13 802 |      29.9 % |
-| Flip-flops          |   1 342 |      0.50 % |         48 343 |      18.1 % |
+| LUTs                |   2 499 |       1.9 % |         77 510 |      57.9 % |
+| of them LUT RAM     |     240 |       0.5 % |         13 818 |      29.9 % |
+| Flip-flops          |   1 357 |      0.51 % |         48 407 |      18.1 % |
 | Block RAMs, 36 kbit |     133 |      36.4 % |            272 |      74.5 % |
 | DSP blocks          |       1 |      0.14 % |            151 |      20.4 % |
 
 128 of the block RAMs are the sample RAM, 4 KB each, and 5 the queue (4096 writes of 42
 bits); the core has five 18 kbit ones besides, so about 90 of the 365 are free and a
-megabyte of sample RAM would not fit in them. The engine is 2 133 of the LUTs, choosing
-among the sample RAM's blocks 210 and among the queue's 153. The LUT RAM is
+megabyte of sample RAM would not fit in them. The engine is 2 134 of the LUTs, choosing
+among the sample RAM's blocks 211 and among the queue's 154. The LUT RAM is
 the voices' tables, and the DSP block the one multiplier that interpolation, volume and pan
 share. The address decoding outside the `megagus` module, a few gates, is not counted.
 
@@ -308,8 +333,9 @@ PAGER11.XM has over a hundred in 40 seconds on any engine, and as many in libope
 |------------|---------|-----|-------|---------------------------------------------------------|
 | `$EFFF200` | ID      | R   | `$4D` | "M"                                                     |
 | `$EFFF201` | ID      | R   | `$47` | "G"                                                     |
-| `$EFFF202` | VERSION | R   | `$04` | 2: with FRAMES; 3: a stopped voice fades its last       |
-|            |         |     |       | value; 4: with the queue                                |
+| `$EFFF202` | VERSION | R   | `$05` | 2: with FRAMES; 3: a stopped voice fades its last       |
+|            |         |     |       | value; 4: with the queue; 5: CTRL and POS read back at  |
+|            |         |     |       | once                                                    |
 | `$EFFF203` | RAMSIZE | R   | `$08` | Sample RAM in units of 64 KB                            |
 | `$EFFF204` | CONTROL | R/W | `$01` | Bit 0: engine on. Bit 7 (write): reset the engine       |
 | `$EFFF205` | MASTER  | R/W | `$20` | Master volume: `$40` is the sum as it is                |
@@ -469,6 +495,7 @@ It first prints one line a test:
 | 48 khz               | 96 000 frames take two seconds of video frames                       |
 | 32 voices            | All run at once                                                      |
 | queue                | A queued write is made on its frame, not before; a forgotten one not |
+| reads back at once   | A voice started and stopped 3000 times reads so each time (from 5)   |
 
 A test that fails says what it read and what it expected (in hex). All of this is silent.
 Then, after a key, nine things to hear, each announced on the screen: a 440 Hz tone in the

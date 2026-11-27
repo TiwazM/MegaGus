@@ -22,7 +22,7 @@ them, and only as many as it has to.
 - a queue of register writes, each made by the engine on the frame it is for: a program
   hands over the next half second of a tune when it has the time, and needs no interrupt
 - sounds together with the SIDs, the OPL and the digital audio, through the MEGA65's mixer
-- 2 496 LUTs (1.9 % of the R6's FPGA), 133 block RAMs (the sample RAM and the queue) and
+- 2 499 LUTs (1.9 % of the R6's FPGA), 133 block RAMs (the sample RAM and the queue) and
   one DSP block
 
 It is a new design, not a copy of the GUS's GF1 chip, and GUS software does not run on it:
@@ -31,12 +31,13 @@ linear volumes trackers use.
 
 ## State
 
-Release 1.1 (2026-11-27, engine version 4) is for the **MEGA65 R6** board; no other board
+Release 1.2 (2026-11-27, engine version 5) is for the **MEGA65 R6** board; no other board
 has been built, and no emulator has MegaGus yet. The engine is checked against a bit-exact
 model in simulation; on an R6 the first version's output was read back and was the model's,
 bit for bit, and the later ones were checked there with the test program and by recordings.
-Release 1.1 adds the queue to 1.0 and changes nothing else: a program written for 1.0
-runs on it as before, and the engine's output with the queue unused is the same.
+Release 1.1 added the queue to 1.0, and 1.2 mends a fault 1.0 and 1.1 have: a voice's state
+read right after a write to its CTRL or POS could be the state before the write, about one
+time in fifty. Neither changes what is played: a program written for 1.0 runs as before.
 
 [docs/megagus.md](docs/megagus.md#status) has what was tested and how, and what is
 [not there](docs/megagus.md#not-there-yet): interrupts, more sample RAM than 512 KB,
@@ -46,8 +47,8 @@ filters.
 
 | File                           | What                                                     |
 |--------------------------------|----------------------------------------------------------|
-| `megagus-1.1-mega65r6.cor`     | The core, for a slot of the MEGA65's flash               |
-| `megagus-1.1-mega65r6.bit`     | The same as a bitstream, to load over JTAG               |
+| `megagus-1.2-mega65r6.cor`     | The core, for a slot of the MEGA65's flash               |
+| `megagus-1.2-mega65r6.bit`     | The same as a bitstream, to load over JTAG               |
 | `MODPLAY.D81`                  | The module player                                        |
 | `MEGAGUS.D81`                  | The programming examples and the test program            |
 
@@ -74,13 +75,13 @@ made with the same bitstream loaded over JTAG.)
 
 **Over JTAG, without flashing.** With a JTAG adapter and MEGA65 Studio's `m65rs`:
 
-    python3 src/tests/megagus/jtagboot.py megagus-1.1-mega65r6.bit
+    python3 src/tests/megagus/jtagboot.py megagus-1.2-mega65r6.bit
 
 The core runs until the MEGA65 is switched off. (The script does more than load the
 bitstream: left alone, a core loaded this way restarts the FPGA from flash slot 1.)
 
 **Is it there?** In MEGA65 mode `PRINT PEEK($EFFF200);PEEK($EFFF201);PEEK($EFFF202)`
-prints `77 71 4`: "MG" and the engine's version.
+prints `77 71 5`: "MG" and the engine's version.
 
 ## Playing modules
 

@@ -173,7 +173,8 @@ What it keeps is the idea; what it changes:
   among them (a write queued 0.3 s ahead is made within a video frame of its time and not
   before, and one that is forgotten is not made); its sounds play; the player plays
   ZEN.S3M as the model does (`hwcompare.py`: 0.943, as on the core of 1.0) and ends in
-  BASIC. Not tried: the 1.1 core file from a flash slot. A program that does not write
+  BASIC. The 1.1 core file, flashed into a slot of that R6 and started from there, runs
+  the test program and passes it (2026-11-27). A program that does not write
   `$EFFF218`-`$EFFF21F` meets one difference: the version number reads 4.
 - No emulator support yet.
 
